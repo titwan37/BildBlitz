@@ -1,0 +1,88 @@
+warning: use of deprecated method `egui::Ui::allocate_ui_at_rect`: Use `allocate_new_ui` instead
+  --> src\ui\viewer.rs:60:20
+   |
+60 |                 ui.allocate_ui_at_rect(screen_rect, |ui| {
+   |                    ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `egui::Ui::allocate_new_ui`: Use `scope_builder` instead
+  --> src\ui\viewer.rs:87:20
+   |
+87 | ...   ui.allocate_new_ui(egui::UiBuilder::new().max_rect(top_rect)...
+   |          ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `egui::Ui::allocate_new_ui`: Use `scope_builder` instead
+   --> src\ui\viewer.rs:159:16
+    |
+159 | ...   ui.allocate_new_ui(egui::UiBuilder::new().max_rect(ribbon_r...
+    |          ^^^^^^^^^^^^^^^
+
+warning: field `scroll_offset` is never read
+  --> src\ui\pane_state.rs:23:9
+   |
+18 | pub struct PaneState {
+   |            --------- field in this struct
+...
+23 |     pub scroll_offset: f32,
+   |         ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `ImageLoader` is never constructed
+ --> src\engine\loader.rs:1:12
+  |
+1 | pub struct ImageLoader {}
+  |            ^^^^^^^^^^^
+
+warning: struct `ImageCache` is never constructed
+ --> src\engine\cache.rs:1:12
+  |
+1 | pub struct ImageCache {}
+  |            ^^^^^^^^^^
+
+warning: struct `PrefetchEngine` is never constructed
+ --> src\engine\prefetch.rs:1:12
+  |
+1 | pub struct PrefetchEngine {}
+  |            ^^^^^^^^^^^^^^
+
+warning: fields `dimensions` and `modified` are never read
+  --> src\engine\gallery.rs:14:9
+   |
+10 | pub struct FileInfo {
+   |            -------- fields in this struct
+...
+14 |     pub dimensions: Option<(u32, u32)>,
+   |         ^^^^^^^^^^
+15 |     pub modified: std::time::SystemTime,
+   |         ^^^^^^^^
+   |
+   = note: `FileInfo` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `Database` is never constructed
+ --> src\library\db.rs:1:12
+  |
+1 | pub struct Database {}
+  |            ^^^^^^^^
+
+warning: struct `MetadataParser` is never constructed
+ --> src\library\metadata.rs:1:12
+  |
+1 | pub struct MetadataParser {}
+  |            ^^^^^^^^^^^^^^
+
+warning: function `save_config` is never used
+  --> src\library\config.rs:53:8
+   |
+53 | pub fn save_config(config: &AppConfig) -> anyhow::Result<()> {
+   |        ^^^^^^^^^^^
+
+warning: function `apply_mica` is never used
+ --> src\os\windows.rs:1:8
+  |
+1 | pub fn apply_mica(_window: &eframe::Frame) {
+  |        ^^^^^^^^^^
+
+warning: `BildBlitz` (bin "BildBlitz") generated 12 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s

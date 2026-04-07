@@ -1,0 +1,76 @@
+    Checking BildBlitz v0.1.0 (C:\Dev\BildBlitz)
+warning: unused import: `debug`
+ --> src\engine\gallery.rs:7:15
+  |
+7 | use tracing::{debug, error, info, warn};
+  |               ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::sync::Arc`
+ --> src\os\logging.rs:2:5
+  |
+2 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `egui::Context::screen_rect`: screen_rect has been split into viewport_rect() and content_rect(). You likely should use content_rect()
+   --> src\app.rs:184:44
+    |
+184 |                 let screen_rect = ui.ctx().screen_rect();
+    |                                            ^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `egui::Ui::allocate_new_ui`: Use `scope_builder` instead
+   --> src\ui\grid.rs:115:16
+    |
+115 |             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink(4.0)), |ui| {
+    |                ^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `egui::Ui::allocate_new_ui`: Use `scope_builder` instead
+   --> src\ui\grid.rs:180:12
+    |
+180 |         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+    |            ^^^^^^^^^^^^^^^
+
+error[E0596]: cannot borrow `render_content` as mutable, as it is not declared as mutable
+   --> src\ui\grid.rs:143:21
+    |
+126 |                             self.draw_thumbnail(ui, &file.path, img_rect, size, thumbnail_manager, thumb_tx);
+    |                             ---- calling `render_content` requires mutable binding due to mutable borrow of `*self`
+...
+143 |                     render_content(ui);
+    |                     ^^^^^^^^^^^^^^ cannot borrow as mutable
+    |
+help: consider changing this to be mutable
+    |
+116 |                 let mut render_content = |ui: &mut egui::Ui| {
+    |                     +++
+
+error[E0596]: cannot borrow `render_content` as mutable, as it is not declared as mutable
+   --> src\ui\grid.rs:211:17
+    |
+192 |                         self.draw_thumbnail(ui, &file.path, thumb_rect, 40.0, thumbnail_manager, thumb_tx);
+    |                         ---- calling `render_content` requires mutable binding due to mutable borrow of `*self`
+...
+211 |                 render_content(ui);
+    |                 ^^^^^^^^^^^^^^ cannot borrow as mutable
+    |
+help: consider changing this to be mutable
+    |
+181 |             let mut render_content = |ui: &mut egui::Ui| {
+    |                 +++
+
+warning: variable does not need to be mutable
+  --> src\ui\log_view.rs:67:21
+   |
+67 |                 let mut scroll_area = ScrollArea::vertical()
+   |                     ----^^^^^^^^^^^
+   |                     |
+   |                     help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0596`.
+warning: `BildBlitz` (bin "BildBlitz") generated 6 warnings
+error: could not compile `BildBlitz` (bin "BildBlitz") due to 2 previous errors; 6 warnings emitted

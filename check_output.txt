@@ -1,0 +1,118 @@
+    Checking BildBlitz v0.1.0 (C:\Dev\BildBlitz)
+warning: unused import: `std::sync::Arc`
+ --> src\ui\grid.rs:2:5
+  |
+2 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Path`
+ --> src\ui\grid.rs:3:17
+  |
+3 | use std::path::{Path, PathBuf};
+  |                 ^^^^
+
+warning: unused import: `debug`
+ --> src\engine\gallery.rs:7:15
+  |
+7 | use tracing::{debug, error, info, warn};
+  |               ^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src\os\logging.rs:2:5
+  |
+2 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: use of deprecated method `egui::Context::screen_rect`: screen_rect has been split into viewport_rect() and content_rect(). You likely should use content_rect()
+   --> src\app.rs:184:44
+    |
+184 |                 let screen_rect = ui.ctx().screen_rect();
+    |                                            ^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+error[E0277]: the trait bound `SizedTexture: From<TextureId>` is not satisfied
+    --> src\app.rs:189:34
+     |
+ 189 |                         ui.image(texture.id(), ui.available_size());
+     |                            ----- ^^^^^^^^^^^^ the trait `From<TextureId>` is not implemented for `SizedTexture`
+     |                            |
+     |                            required by a bound introduced by this call
+     |
+help: the following other types implement trait `From<T>`
+    --> C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-0.33.3\src\load.rs:470:1
+     |
+ 470 | impl From<(TextureId, Vec2)> for SizedTexture {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SizedTexture` implements `From<(TextureId, egui::Vec2)>`
+...
+ 477 | impl<'a> From<&'a TextureHandle> for SizedTexture {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SizedTexture` implements `From<&TextureHandle>`
+     = note: required for `TextureId` to implement `Into<SizedTexture>`
+     = note: required for `ImageSource<'_>` to implement `From<TextureId>`
+     = note: 1 redundant requirement hidden
+     = note: required for `TextureId` to implement `Into<ImageSource<'_>>`
+note: required by a bound in `Ui::image`
+    --> C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-0.33.3\src\ui.rs:2326:46
+     |
+2326 |     pub fn image<'a>(&mut self, source: impl Into<ImageSource<'a>>) -> Response {
+     |                                              ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Ui::image`
+
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+    --> src\app.rs:189:28
+     |
+ 189 |                         ui.image(texture.id(), ui.available_size());
+     |                            ^^^^^               ------------------- unexpected argument #2 of type `egui::Vec2`
+     |
+note: method defined here
+    --> C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-0.33.3\src\ui.rs:2326:12
+     |
+2326 |     pub fn image<'a>(&mut self, source: impl Into<ImageSource<'a>>) -> Response {
+     |            ^^^^^
+help: remove the extra argument
+     |
+ 189 -                         ui.image(texture.id(), ui.available_size());
+ 189 +                         ui.image(texture.id());
+     |
+
+warning: use of deprecated associated function `egui::Frame::none`: Use `Frame::NONE` or `Frame::new()` instead.
+  --> src\ui\grid.rs:46:92
+   |
+46 |                 let (inner, dropped_payload) = ui.dnd_drop_zone::<PathBuf, _>(egui::Frame::none().fill(fill).inner_margin(8.0), |ui| {
+   |                                                                                            ^^^^
+
+warning: use of deprecated method `egui::Ui::allocate_ui_at_rect`: Use `allocate_new_ui` instead
+   --> src\ui\grid.rs:114:16
+    |
+114 |             ui.allocate_ui_at_rect(rect.shrink(4.0), |ui| {
+    |                ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `egui::Ui::allocate_ui_at_rect`: Use `allocate_new_ui` instead
+   --> src\ui\grid.rs:164:12
+    |
+164 |         ui.allocate_ui_at_rect(rect, |ui| {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `inner`
+  --> src\ui\grid.rs:46:22
+   |
+46 |                 let (inner, dropped_payload) = ui.dnd_drop_zone::<PathBuf, _>(egui::Frame::none().fill(fill).inner_margin(8.0), |ui| {
+   |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_inner`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> src\ui\log_view.rs:67:21
+   |
+67 |                 let mut scroll_area = ScrollArea::vertical()
+   |                     ----^^^^^^^^^^^
+   |                     |
+   |                     help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0061, E0277.
+For more information about an error, try `rustc --explain E0061`.
+warning: `BildBlitz` (bin "BildBlitz") generated 10 warnings
+error: could not compile `BildBlitz` (bin "BildBlitz") due to 2 previous errors; 10 warnings emitted

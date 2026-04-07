@@ -1,0 +1,85 @@
+    Checking BildBlitz v0.1.0 (L:\My Drive\Work\Code\BildBlitz)
+warning: hard linking files in the incremental compilation cache failed. copying files instead. consider moving the cache directory to a file system which supports hard linking in session dir `\\?\L:\My Drive\Work\Code\BildBlitz\target\debug\incremental\BildBlitz-34lfldj3lekuj\s-hgua4fw2sr-1lvrswk-working`
+
+warning: unused import: `crate::library::scanner`
+ --> src\app.rs:2:5
+  |
+2 | use crate::library::scanner;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `GridView` is never constructed
+ --> src\ui\grid.rs:3:12
+  |
+3 | pub struct GridView {}
+  |            ^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `show` is never used
+ --> src\ui\grid.rs:6:12
+  |
+5 | impl GridView {
+  | ------------- method in this implementation
+6 |     pub fn show(&mut self, ui: &mut egui::Ui) {
+  |            ^^^^
+
+warning: struct `ImageViewer` is never constructed
+ --> src\ui\viewer.rs:3:12
+  |
+3 | pub struct ImageViewer {}
+  |            ^^^^^^^^^^^
+
+warning: method `show` is never used
+ --> src\ui\viewer.rs:6:12
+  |
+5 | impl ImageViewer {
+  | ---------------- method in this implementation
+6 |     pub fn show(&mut self, ui: &mut egui::Ui) {
+  |            ^^^^
+
+warning: function `toolbar` is never used
+ --> src\ui\tools.rs:3:8
+  |
+3 | pub fn toolbar(ui: &mut egui::Ui) {
+  |        ^^^^^^^
+
+warning: struct `ImageLoader` is never constructed
+ --> src\engine\loader.rs:1:12
+  |
+1 | pub struct ImageLoader {}
+  |            ^^^^^^^^^^^
+
+warning: struct `ImageCache` is never constructed
+ --> src\engine\cache.rs:1:12
+  |
+1 | pub struct ImageCache {}
+  |            ^^^^^^^^^^
+
+warning: struct `PrefetchEngine` is never constructed
+ --> src\engine\prefetch.rs:1:12
+  |
+1 | pub struct PrefetchEngine {}
+  |            ^^^^^^^^^^^^^^
+
+warning: struct `Database` is never constructed
+ --> src\library\db.rs:1:12
+  |
+1 | pub struct Database {}
+  |            ^^^^^^^^
+
+warning: struct `MetadataParser` is never constructed
+ --> src\library\metadata.rs:1:12
+  |
+1 | pub struct MetadataParser {}
+  |            ^^^^^^^^^^^^^^
+
+warning: function `apply_mica` is never used
+ --> src\os\windows.rs:1:8
+  |
+1 | pub fn apply_mica(_window: &eframe::Frame) {
+  |        ^^^^^^^^^^
+
+warning: `BildBlitz` (bin "BildBlitz") generated 13 warnings (run `cargo fix --bin "BildBlitz" -p BildBlitz` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.08s

@@ -1,0 +1,24 @@
+[package]
+name = "BildBlitz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dirs = "6.0.0"
+eframe = { version = "0.33.3", features = ["default"] }
+egui = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["image"] }
+image = { version = "0.25.10", features = ["default"] }
+moka = { version = "0.12.14", features = ["future"] }
+rayon = "1.11.0"
+sysinfo = "0.38.4"
+tokio = { version = "1.50.0", features = ["full"] }
+walkdir = "2.5.0"
+anyhow = "1.0"
+chrono = "0.4"
+opener = { version = "0.7", features = ["reveal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

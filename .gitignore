@@ -1,0 +1,29 @@
+# --- Rust / Cargo ---
+# The target directory contains all compiled binary data
+target/
+**/*.o
+**/*.rlib
+**/*.pdb
+
+# --- Logs & Debugging ---
+# These are the log files I see in your directory
+cargo_check*.log
+cargo_check*.txt
+project_files.txt
+
+# --- Node.js / Web ---
+# If you have frontend components
+node_modules/
+npm-debug.log*
+
+# --- Editors ---
+# VS Code settings (optional, but usually ignored in teams)
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# --- Operating System ---
+desktop.ini
+.DS_Store
+Thumbs.db
