@@ -1,9 +1,12 @@
 use egui::ScrollArea;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use crate::os::logging::LogStream;
 
+const MAX_LOG_ENTRIES: usize = 500;
+
 pub struct LogView {
-    pub entries: Vec<String>,
+    pub entries: VecDeque<String>,
     pub is_open: bool,
     pub log_dir: PathBuf,
     pub receiver: tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -13,7 +16,7 @@ pub struct LogView {
 impl LogView {
     pub fn new(log_stream: LogStream, log_dir: PathBuf) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::with_capacity(MAX_LOG_ENTRIES),
             is_open: false,
             log_dir,
             receiver: log_stream.receiver,
@@ -24,10 +27,10 @@ impl LogView {
     pub fn update(&mut self) {
         // Drain all available log entries
         while let Ok(msg) = self.receiver.try_recv() {
-            self.entries.push(msg);
-            // Keep only the last 500 entries to avoid memory bloat
-            if self.entries.len() > 500 {
-                self.entries.remove(0);
+            self.entries.push_back(msg);
+            // Keep only the last N entries — O(1) via VecDeque::pop_front (B13 fix)
+            if self.entries.len() > MAX_LOG_ENTRIES {
+                self.entries.pop_front();
             }
         }
     }
@@ -44,24 +47,33 @@ impl LogView {
                 ui.horizontal(|ui| {
                     ui.heading("Live Logs");
                     ui.separator();
-                    
-                    if ui.button("📂 Open Log Folder").on_hover_text("Open the folder containing log files in Explorer").clicked() {
+
+                    if ui
+                        .button("📂 Open Log Folder")
+                        .on_hover_text(
+                            "Open the folder containing log files in Explorer",
+                        )
+                        .clicked()
+                    {
                         crate::os::logging::open_log_folder(&self.log_dir);
                     }
-                    
+
                     if ui.button("🗑 Clear").clicked() {
                         self.entries.clear();
                     }
-                    
+
                     ui.checkbox(&mut self.autoscroll, "Autoscroll");
-                    
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("❌ Close").clicked() {
-                            self.is_open = false;
-                        }
-                    });
+
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if ui.button("❌ Close").clicked() {
+                                self.is_open = false;
+                            }
+                        },
+                    );
                 });
-                
+
                 ui.separator();
 
                 let scroll_area = ScrollArea::vertical()
@@ -86,8 +98,9 @@ impl LogView {
                                     egui::RichText::new(entry)
                                         .monospace()
                                         .size(12.0)
-                                        .color(color)
-                                ).truncate()
+                                        .color(color),
+                                )
+                                .truncate(),
                             );
                         }
                     });

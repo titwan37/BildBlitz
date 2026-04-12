@@ -10,6 +10,9 @@ target/
 cargo_check*.log
 cargo_check*.txt
 project_files.txt
+check_output*.*
+check*.*
+output*.*
 
 # --- Node.js / Web ---
 # If you have frontend components

@@ -15,7 +15,6 @@ dependencies = [
  "image",
  "moka",
  "opener",
- "rayon",
  "serde",
  "serde_json",
  "sysinfo",

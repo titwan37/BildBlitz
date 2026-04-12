@@ -1,8 +1,9 @@
 mod app;
-mod ui;
 mod engine;
 mod library;
+mod messages;
 mod os;
+mod ui;
 
 use crate::app::BildBlitzApp;
 

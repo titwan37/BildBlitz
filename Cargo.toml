@@ -10,7 +10,6 @@ egui = "0.33.3"
 egui_extras = { version = "0.33.3", features = ["image"] }
 image = { version = "0.25.10", features = ["default"] }
 moka = { version = "0.12.14", features = ["future"] }
-rayon = "1.11.0"
 sysinfo = "0.38.4"
 tokio = { version = "1.50.0", features = ["full"] }
 walkdir = "2.5.0"
