@@ -13,6 +13,13 @@ pub enum PaneSide {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TabMode {
+    FolderView,
+    Collections,
+    Duplicates,
+}
+
 use crate::engine::gallery::FileInfo;
 
 pub struct PaneState {
@@ -25,6 +32,7 @@ pub struct PaneState {
     pub renaming_path: Option<PathBuf>,
     pub rename_buffer: String,
     pub last_selected_index: Option<usize>,
+    pub tab_mode: TabMode,
 }
 
 impl PaneState {
@@ -39,6 +47,7 @@ impl PaneState {
             renaming_path: None,
             rename_buffer: String::new(),
             last_selected_index: None,
+            tab_mode: TabMode::FolderView,
         }
     }
 }

@@ -60,6 +60,10 @@ impl GridView {
             }
         }
 
+        let thumbnail_size = state.thumbnail_size;
+        let view_state = state.view_state;
+        let file_count = state.files.len();
+
         egui::ScrollArea::vertical()
             .id_salt(ui.id().with(gctx.side).with("main_scroll"))
             .auto_shrink([false, false])
@@ -75,43 +79,17 @@ impl GridView {
                     |ui| {
                         ui.set_min_size(ui.available_size());
 
-                        let thumbnail_size = state.thumbnail_size;
-                        let view_state = state.view_state;
-                        // Iterate by index to avoid cloning the entire file list (B11/P1 fix)
-                        let file_count = state.files.len();
-
                         match view_state {
                             crate::ui::pane_state::ViewState::Grid => {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing =
-                                        egui::vec2(12.0, 12.0);
-                                    for i in 0..file_count {
-                                        // Clone only the single FileInfo we need
-                                        let file = state.files[i].clone();
-                                        if let Some(a) = self.render_grid_item(
-                                            ui,
-                                            &file,
-                                            i,
-                                            thumbnail_size,
-                                            state,
-                                            gctx,
-                                        ) {
-                                            action = a;
-                                        }
-                                    }
-                                });
+                                self.show_virtualized_grid(
+                                    ui, state, gctx, thumbnail_size, file_count,
+                                    &mut action,
+                                );
                             }
                             crate::ui::pane_state::ViewState::List => {
-                                ui.vertical(|ui| {
-                                    for i in 0..file_count {
-                                        let file = state.files[i].clone();
-                                        if let Some(a) = self.render_list_item(
-                                            ui, &file, i, state, gctx,
-                                        ) {
-                                            action = a;
-                                        }
-                                    }
-                                });
+                                self.show_virtualized_list(
+                                    ui, state, gctx, file_count, &mut action,
+                                );
                             }
                         }
                     },
@@ -127,7 +105,7 @@ impl GridView {
                     ui.id().with("bg_context_interact"),
                     egui::Sense::click(),
                 );
-                
+
                 bg_response.context_menu(|ui| {
                     if ui
                         .add_enabled(gctx.can_paste, egui::Button::new("📋 Paste"))
@@ -140,6 +118,146 @@ impl GridView {
             });
 
         action
+    }
+
+    // ── Virtualized Grid Rendering ────────────────────────────────────────────
+
+    /// Renders only the visible grid items within the scroll viewport.
+    fn show_virtualized_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut PaneState,
+        gctx: &GridContext<'_>,
+        thumbnail_size: f32,
+        file_count: usize,
+        action: &mut GridAction,
+    ) {
+        let item_spacing = egui::vec2(12.0, 12.0);
+        let total_size = egui::vec2(thumbnail_size, thumbnail_size + 24.0);
+        let item_total = total_size + item_spacing;
+
+        let available_width = ui.available_width();
+        let columns =
+            (available_width / item_total.x).floor().max(1.0) as usize;
+
+        let row_height = item_total.y;
+        let total_rows = (file_count + columns - 1) / columns.max(1);
+        let total_height = (total_rows as f32 * row_height).max(0.0);
+
+        let (_, body) =
+            ui.allocate_space(egui::vec2(available_width, total_height));
+        let mut ui = ui.child_ui(body, egui::Layout::default(), None);
+
+        let scroll_offset = (ui.clip_rect().min.y - body.min.y).max(0.0);
+        let visible_height = ui.clip_rect().height();
+        let first_visible_row =
+            (scroll_offset / row_height).floor().max(0.0) as usize;
+        let last_visible_row =
+            ((scroll_offset + visible_height) / row_height).ceil() as usize;
+
+        // Add a buffer of 1 row above and below to prevent pop-in
+        let start_row = first_visible_row.saturating_sub(1);
+        let end_row = (last_visible_row + 1).min(total_rows);
+
+        for row in start_row..end_row {
+            let start_idx = row * columns;
+            let end_idx = (start_idx + columns).min(file_count);
+
+            if start_idx >= file_count {
+                break;
+            }
+
+            let y_offset = row as f32 * row_height;
+
+            for col in 0..(end_idx - start_idx) {
+                let i = start_idx + col;
+                let x_offset = col as f32 * item_total.x;
+
+                let item_rect = egui::Rect::from_min_size(
+                    body.min + egui::vec2(x_offset, y_offset),
+                    total_size,
+                );
+
+                // Skip items outside the visible area
+                if !ui.clip_rect().intersects(item_rect.expand(50.0)) {
+                    continue;
+                }
+
+                let file = state.files[i].clone();
+
+                let mut item_ui = ui.child_ui(
+                    item_rect,
+                    egui::Layout::top_down(egui::Align::Min),
+                    None,
+                );
+                if let Some(a) = self.render_grid_item_at_rect(
+                    &mut item_ui,
+                    &file,
+                    i,
+                    thumbnail_size,
+                    state,
+                    gctx,
+                    item_rect,
+                ) {
+                    *action = a;
+                }
+            }
+        }
+    }
+
+    // ── Virtualized List Rendering ────────────────────────────────────────────
+
+    /// Renders only the visible list items within the scroll viewport.
+    fn show_virtualized_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut PaneState,
+        gctx: &GridContext<'_>,
+        file_count: usize,
+        action: &mut GridAction,
+    ) {
+        let item_height = 48.0;
+        let total_height = file_count as f32 * item_height;
+
+        let (_, body) =
+            ui.allocate_space(egui::vec2(ui.available_width(), total_height));
+        let mut ui = ui.child_ui(body, egui::Layout::default(), None);
+
+        let scroll_offset = (ui.clip_rect().min.y - body.min.y).max(0.0);
+        let visible_height = ui.clip_rect().height();
+        let first_visible =
+            (scroll_offset / item_height).floor().max(0.0) as usize;
+        let last_visible =
+            ((scroll_offset + visible_height) / item_height).ceil() as usize;
+
+        // Add a buffer of 2 items above and below
+        let start = first_visible.saturating_sub(2);
+        let end = (last_visible + 2).min(file_count);
+
+        for i in start..end {
+            let file = state.files[i].clone();
+            let y_offset = i as f32 * item_height;
+            let item_rect = egui::Rect::from_min_size(
+                body.min + egui::vec2(0.0, y_offset),
+                egui::vec2(ui.available_width(), item_height),
+            );
+
+            let mut item_ui = ui.child_ui(
+                item_rect,
+                egui::Layout::top_down(egui::Align::Min),
+                None,
+            );
+            if let Some(a) = self.render_list_item_at_rect(
+                &mut item_ui,
+                &file,
+                i,
+                state,
+                gctx,
+                item_rect,
+            ) {
+                *action = a;
+            }
+        }
     }
 
     // ── Shared helpers (CS3 fix: extracted from grid/list item rendering) ──────
@@ -308,7 +426,7 @@ impl GridView {
         drag_payload
     }
 
-    // ── Grid Item Rendering ───────────────────────────────────────────────────
+    // ── Grid Item Rendering (allocates its own rect) ─────────────────────────
 
     fn render_grid_item(
         &mut self,
@@ -320,10 +438,24 @@ impl GridView {
         gctx: &GridContext<'_>,
     ) -> Option<GridAction> {
         let total_size = egui::vec2(size, size + 24.0);
+        let rect = ui.allocate_exact_size(total_size, egui::Sense::hover()).0;
+        self.render_grid_item_at_rect(ui, file, index, size, state, gctx, rect)
+    }
+
+    // ── Grid Item Rendering (uses pre-allocated rect for virtualization) ─────
+
+    fn render_grid_item_at_rect(
+        &mut self,
+        ui: &mut egui::Ui,
+        file: &FileInfo,
+        index: usize,
+        size: f32,
+        state: &mut PaneState,
+        gctx: &GridContext<'_>,
+        rect: egui::Rect,
+    ) -> Option<GridAction> {
         let mut action = None;
         let item_id = ui.id().with(&file.path);
-        let rect =
-            ui.allocate_exact_size(total_size, egui::Sense::hover()).0;
         let response =
             ui.interact(rect, item_id, egui::Sense::click_and_drag());
         self.handle_selection(file, index, state, &response, ui);
@@ -542,7 +674,7 @@ impl GridView {
         action
     }
 
-    // ── List Item Rendering ───────────────────────────────────────────────────
+    // ── List Item Rendering (allocates its own rect) ─────────────────────────
 
     fn render_list_item(
         &mut self,
@@ -559,6 +691,20 @@ impl GridView {
                 egui::Sense::click_and_drag(),
             )
             .0;
+        self.render_list_item_at_rect(ui, file, index, state, gctx, rect)
+    }
+
+    // ── List Item Rendering (uses pre-allocated rect for virtualization) ─────
+
+    fn render_list_item_at_rect(
+        &mut self,
+        ui: &mut egui::Ui,
+        file: &FileInfo,
+        index: usize,
+        state: &mut PaneState,
+        gctx: &GridContext<'_>,
+        rect: egui::Rect,
+    ) -> Option<GridAction> {
         let response =
             ui.interact(rect, ui.id().with(&file.path), egui::Sense::click_and_drag());
         let mut action = None;
@@ -781,6 +927,88 @@ impl GridView {
         if dnd_action.is_some() {
             action = dnd_action;
         }
+        action
+    }
+
+    // ── Virtual Collections (Clusters) Rendering ─────────────────────────────
+
+    pub fn show_clusters(
+        &mut self,
+        ui: &mut egui::Ui,
+        clusters: &[crate::messages::Cluster],
+        state: &mut PaneState,
+        gctx: &GridContext<'_>,
+    ) -> GridAction {
+        let mut action = GridAction::None;
+
+        // Ctrl+Scroll to resize thumbnails
+        if ui.rect_contains_pointer(ui.available_rect_before_wrap()) {
+            let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+            if ui.input(|i| i.modifiers.command) && scroll_delta != 0.0 {
+                state.thumbnail_size =
+                    (state.thumbnail_size + scroll_delta * 0.1).clamp(64.0, 512.0);
+            }
+        }
+
+        egui::ScrollArea::vertical()
+            .id_salt(ui.id().with(gctx.side).with("clusters_scroll"))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                let thumbnail_size = state.thumbnail_size;
+
+                for cluster in clusters {
+                    let header_text = if cluster.id == 0 {
+                        "📁 Miscellaneous".to_string()
+                    } else {
+                        format!("Theme {} ({} items)", cluster.id, cluster.members.len())
+                    };
+
+                    ui.add_space(8.0);
+                    
+                    let id = ui.id().with("cluster").with(cluster.id);
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new(header_text).heading().strong()
+                    )
+                    .id_salt(id)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Some(label) = &cluster.label {
+                            ui.label(egui::RichText::new(format!("💡 Reason: {}", label)).weak().italics());
+                        }
+                        
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                            for (idx, path) in cluster.members.iter().enumerate() {
+                                let file = FileInfo {
+                                    path: path.clone(),
+                                    name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                                    is_dir: false,
+                                    size: 0,
+                                    dimensions: None,
+                                    modified: std::time::SystemTime::now(),
+                                    phash: None,
+                                };
+
+                                if let Some(a) = self.render_grid_item(
+                                    ui,
+                                    &file,
+                                    idx,
+                                    thumbnail_size,
+                                    state,
+                                    gctx,
+                                ) {
+                                    action = a;
+                                }
+                            }
+                        });
+                        ui.add_space(12.0);
+                    });
+                    ui.separator();
+                }
+            });
+
         action
     }
 

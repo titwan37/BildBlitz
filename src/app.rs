@@ -31,6 +31,18 @@ struct ChannelHub {
     count_rx: mpsc::Receiver<FolderCountResult>,
     hd_tx: mpsc::Sender<FullImageResult>,
     hd_rx: mpsc::Receiver<FullImageResult>,
+    backend_tx: mpsc::Sender<crate::messages::BackendMsg>,
+    backend_rx: mpsc::Receiver<crate::messages::BackendMsg>,
+    ag_prog_tx: mpsc::Sender<crate::messages::AutoGroupProgress>,
+    ag_prog_rx: mpsc::Receiver<crate::messages::AutoGroupProgress>,
+    ag_res_tx: mpsc::Sender<crate::messages::AutoGroupResult>,
+    ag_res_rx: mpsc::Receiver<crate::messages::AutoGroupResult>,
+    dupes_tx: mpsc::Sender<crate::messages::DuplicatesResult>,
+    dupes_rx: mpsc::Receiver<crate::messages::DuplicatesResult>,
+    ag_tune_tx: mpsc::Sender<crate::messages::AutoGroupTuneResult>,
+    ag_tune_rx: mpsc::Receiver<crate::messages::AutoGroupTuneResult>,
+    audit_tx: mpsc::Sender<crate::messages::AuditMsg>,
+    audit_rx: mpsc::Receiver<crate::messages::AuditMsg>,
 }
 
 impl ChannelHub {
@@ -39,6 +51,12 @@ impl ChannelHub {
         let (scan_tx, scan_rx) = mpsc::channel(10);
         let (count_tx, count_rx) = mpsc::channel(100);
         let (hd_tx, hd_rx) = mpsc::channel(10);
+        let (backend_tx, backend_rx) = mpsc::channel(10);
+        let (ag_prog_tx, ag_prog_rx) = mpsc::channel(10);
+        let (ag_res_tx, ag_res_rx) = mpsc::channel(10);
+        let (dupes_tx, dupes_rx) = mpsc::channel(10);
+        let (ag_tune_tx, ag_tune_rx) = mpsc::channel(10);
+        let (audit_tx, audit_rx) = mpsc::channel(100);
         Self {
             thumb_tx,
             thumb_rx,
@@ -48,6 +66,18 @@ impl ChannelHub {
             count_rx,
             hd_tx,
             hd_rx,
+            backend_tx,
+            backend_rx,
+            ag_prog_tx,
+            ag_prog_rx,
+            ag_res_tx,
+            ag_res_rx,
+            dupes_tx,
+            dupes_rx,
+            ag_tune_tx,
+            ag_tune_rx,
+            audit_tx,
+            audit_rx,
         }
     }
 }
@@ -107,6 +137,17 @@ pub struct BildBlitzApp {
     clipboard: ClipboardState,
     notification: Option<Notification>,
     is_tip_visible: bool,
+    
+    // Feature: Auto Group
+    auto_group_state: crate::ui::auto_group::AutoGroupState,
+
+    // Feature: Live Audit
+    audit: crate::ui::audit::SystemAudit,
+    is_audit_open: bool,
+
+    // Database
+    db: crate::library::db::DatabaseManager,
+    duplicates: Vec<crate::messages::Cluster>,
 }
 
 impl BildBlitzApp {
@@ -114,10 +155,11 @@ impl BildBlitzApp {
         _cc: &eframe::CreationContext<'_>,
         log_stream: LogStream,
         log_dir: PathBuf,
+        db: crate::library::db::DatabaseManager,
     ) -> Self {
         let config = crate::library::config::load_config();
 
-        Self {
+        let mut app = Self {
             navigation: NavigationPane::new(config.favorites),
             is_split_view_active: false,
             active_pane: PaneSide::Left,
@@ -137,7 +179,24 @@ impl BildBlitzApp {
             clipboard: ClipboardState::new(),
             notification: None,
             is_tip_visible: true,
-        }
+            auto_group_state: crate::ui::auto_group::AutoGroupState::new(),
+            audit: crate::ui::audit::SystemAudit::new(),
+            is_audit_open: false,
+            db: db.clone(),
+            duplicates: Vec::new(),
+        };
+
+        // Connect audit channel to managers
+        app.thumbnail_manager.set_audit_tx(app.channels.audit_tx.clone());
+
+        // Initial Audit: Database
+        let _ = app.channels.audit_tx.try_send(crate::messages::AuditMsg {
+            name: "Database Engine Online".to_string(),
+            success: true,
+            message: Some("Connected to SQLite library".to_string()),
+        });
+
+        app
     }
 
     /// Returns a mutable reference to the active pane's state.
@@ -177,13 +236,16 @@ impl BildBlitzApp {
 // ── eframe::App Implementation ────────────────────────────────────────────────
 
 impl eframe::App for BildBlitzApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
         self.log_view.update();
         self.process_keyboard_input(ctx);
         self.drain_channels(ctx);
         self.render_top_panel(ctx);
         self.render_tip_bubble(ctx);
         self.render_notification(ctx);
+
+        self.auto_group_state.show(ctx, self.pane_state(self.active_pane).current_path.clone(), self.channels.backend_tx.clone());
 
         egui::SidePanel::left("nav_panel")
             .resizable(true)
@@ -223,6 +285,15 @@ impl eframe::App for BildBlitzApp {
                 .default_width(320.0)
                 .show(ctx, |ui| {
                     self.show_properties_pane(ui);
+                });
+        }
+
+        if self.is_audit_open {
+            egui::SidePanel::right("audit_panel")
+                .resizable(true)
+                .default_width(300.0)
+                .show(ctx, |ui| {
+                    self.audit.show(ui);
                 });
         }
     }
@@ -317,11 +388,16 @@ impl BildBlitzApp {
 
         // Handle incoming scan results
         while let Ok(result) = self.channels.scan_rx.try_recv() {
-            if let Some(path) = result.invalidated_path {
+            for path in result.invalidated_paths {
                 self.left_grid.folder_counts.remove(&path);
                 self.left_grid.loading_counts.remove(&path);
                 self.right_grid.folder_counts.remove(&path);
                 self.right_grid.loading_counts.remove(&path);
+            }
+            for path in result.transformed_paths {
+                self.left_grid.textures.remove(&path);
+                self.right_grid.textures.remove(&path);
+                self.hd_textures.remove(&path);
             }
             let state = self.pane_state_mut(result.pane_side);
             state.files = result.files;
@@ -337,6 +413,313 @@ impl BildBlitzApp {
                 .folder_counts
                 .insert(result.path, result.count);
         }
+
+        // Handle audit messages
+        while let Ok(msg) = self.channels.audit_rx.try_recv() {
+            let status = if msg.success {
+                crate::ui::audit::AuditStatus::Success
+            } else {
+                crate::ui::audit::AuditStatus::Failure(msg.message.unwrap_or_else(|| "Unknown error".to_string()))
+            };
+            self.audit.push(&msg.name, status);
+        }
+
+        // Handle backend messages
+        while let Ok(msg) = self.channels.backend_rx.try_recv() {
+            match msg {
+                crate::messages::BackendMsg::AutoGroupStart(config) => {
+                    let prog_tx = self.channels.ag_prog_tx.clone();
+                    let res_tx = self.channels.ag_res_tx.clone();
+                    let audit_tx = self.channels.audit_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: "Auto-Group Analysis Started".to_string(),
+                            success: true,
+                            message: None,
+                        }).await;
+                        match crate::engine::auto_group::run_auto_group(config, prog_tx).await {
+                            Ok(res) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Auto-Group Analysis Succeeded".to_string(),
+                                    success: true,
+                                    message: Some(format!("Found {} clusters", res.clusters.len())),
+                                }).await;
+                                let _ = res_tx.send(res).await;
+                            }
+                            Err(e) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Auto-Group Analysis Failed".to_string(),
+                                    success: false,
+                                    message: Some(e.to_string()),
+                                }).await;
+                            }
+                        }
+                    });
+                }
+                crate::messages::BackendMsg::AutoGroupCommit { result, source_path } => {
+                    let prog_tx = self.channels.ag_prog_tx.clone();
+                    let res_tx = self.channels.ag_res_tx.clone();
+                    let audit_tx = self.channels.audit_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: "Committing Auto-Groups to Disk".to_string(),
+                            success: true,
+                            message: None,
+                        }).await;
+                        match crate::engine::auto_group::commit_auto_group(result, source_path, prog_tx).await {
+                            Ok(_) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Auto-Group Commit Succeeded".to_string(),
+                                    success: true,
+                                    message: None,
+                                }).await;
+                            }
+                            Err(e) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Auto-Group Commit Failed".to_string(),
+                                    success: false,
+                                    message: Some(e.to_string()),
+                                }).await;
+                            }
+                        }
+                        // Just clear it by sending an empty result when done
+                        let _ = res_tx.send(crate::messages::AutoGroupResult { clusters: vec![], forces: (0.0, 0.0, 0.0) }).await;
+                    });
+                }
+                crate::messages::BackendMsg::AutoGroupTuneEpsilon(config) => {
+                    let prog_tx = self.channels.ag_prog_tx.clone();
+                    let tune_tx = self.channels.ag_tune_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(res) = crate::engine::auto_group::run_auto_tune_epsilon(config, prog_tx).await {
+                            let _ = tune_tx.send(res).await;
+                        }
+                    });
+                }
+                crate::messages::BackendMsg::AutoGroupRunStudy(config) => {
+                    let prog_tx = self.channels.ag_prog_tx.clone();
+                    let audit_tx = self.channels.audit_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: "Comparative Research Study Started".to_string(),
+                            success: true,
+                            message: Some("Evaluating 3 algorithms on current folder".to_string()),
+                        }).await;
+                        match crate::engine::benchmark::run_study_on_folder(config, prog_tx).await {
+                            Ok(_) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Comparative Study Succeeded".to_string(),
+                                    success: true,
+                                    message: Some("Results saved to result_folder with datetime prefix".to_string()),
+                                }).await;
+                            }
+                            Err(e) => {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: "Comparative Study Failed".to_string(),
+                                    success: false,
+                                    message: Some(e.to_string()),
+                                }).await;
+                            }
+                        }
+                    });
+                }
+                crate::messages::BackendMsg::DuplicatesRefresh => {
+                    self.refresh_duplicates(ctx);
+                }
+                crate::messages::BackendMsg::TransformRotate { paths, degrees } => {
+                    let side = self.active_pane;
+                    let current_dir = self.active_pane_state().current_path.clone();
+                    let tx = self.channels.scan_tx.clone();
+                    let thumb_tx = self.channels.thumb_tx.clone();
+                    let hd_tx = self.channels.hd_tx.clone();
+                    let audit_tx = self.channels.audit_tx.clone();
+                    let ctx_clone = ctx.clone();
+                    let tm = self.thumbnail_manager.clone();
+                    let fm = self.full_image_manager.clone();
+                    tokio::spawn(async move {
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: format!("Rotating {} images ({}°)", paths.len(), degrees),
+                            success: true,
+                            message: None,
+                        }).await;
+                        for path in &paths {
+                            if let Err(e) = crate::library::transform::rotate(path, degrees) {
+                                let _ = audit_tx.send(crate::messages::AuditMsg {
+                                    name: format!("Failed to rotate {:?}", path),
+                                    success: false,
+                                    message: Some(e.to_string()),
+                                }).await;
+                                continue;
+                            }
+                            tm.invalidate(path).await;
+                            fm.invalidate(path).await;
+
+                            // Proactively re-trigger thumbnail generation (B12 fix)
+                            if let Some(image) = tm.get_thumbnail(path, 160).await {
+                                // Send to both panes to ensure full UI synchronization
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Left, image: image.clone() }).await;
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Right, image }).await;
+                            }
+                            // Proactively re-trigger HD image generation
+                            if let Some(image) = fm.get_image(path).await {
+                                let _ = hd_tx.send(FullImageResult { path: path.clone(), image }).await;
+                            }
+                        }
+                        if let Some(dir) = current_dir {
+                            let files = crate::engine::gallery::GalleryScanner::scan_directory(&dir).await;
+                            let _ = tx.send(ScanResult { 
+                                pane_side: side, 
+                                files, 
+                                invalidated_paths: vec![],
+                                transformed_paths: paths,
+                            }).await;
+                            ctx_clone.request_repaint();
+                        }
+                    });
+                }
+                crate::messages::BackendMsg::TransformFlipH { paths } => {
+                    let side = self.active_pane;
+                    let current_dir = self.active_pane_state().current_path.clone();
+                    let tx = self.channels.scan_tx.clone();
+                    let thumb_tx = self.channels.thumb_tx.clone();
+                    let hd_tx = self.channels.hd_tx.clone();
+                    let ctx_clone = ctx.clone();
+                    let tm = self.thumbnail_manager.clone();
+                    let fm = self.full_image_manager.clone();
+                    tokio::spawn(async move {
+                        for path in &paths {
+                            let _ = crate::library::transform::flip_horizontal(path);
+                            tm.invalidate(path).await;
+                            fm.invalidate(path).await;
+
+                            // Proactively re-trigger thumbnail generation (B12 fix)
+                            if let Some(image) = tm.get_thumbnail(path, 160).await {
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Left, image: image.clone() }).await;
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Right, image }).await;
+                            }
+                            if let Some(image) = fm.get_image(path).await {
+                                let _ = hd_tx.send(FullImageResult { path: path.clone(), image }).await;
+                            }
+                        }
+                        if let Some(dir) = current_dir {
+                            let files = crate::engine::gallery::GalleryScanner::scan_directory(&dir).await;
+                            let _ = tx.send(ScanResult { 
+                                pane_side: side, 
+                                files, 
+                                invalidated_paths: vec![],
+                                transformed_paths: paths,
+                            }).await;
+                            ctx_clone.request_repaint();
+                        }
+                    });
+                }
+                crate::messages::BackendMsg::TransformFlipV { paths } => {
+                    let side = self.active_pane;
+                    let current_dir = self.active_pane_state().current_path.clone();
+                    let tx = self.channels.scan_tx.clone();
+                    let thumb_tx = self.channels.thumb_tx.clone();
+                    let hd_tx = self.channels.hd_tx.clone();
+                    let ctx_clone = ctx.clone();
+                    let tm = self.thumbnail_manager.clone();
+                    let fm = self.full_image_manager.clone();
+                    tokio::spawn(async move {
+                        for path in &paths {
+                            let _ = crate::library::transform::flip_vertical(path);
+                            tm.invalidate(path).await;
+                            fm.invalidate(path).await;
+
+                            // Proactively re-trigger thumbnail generation (B12 fix)
+                            if let Some(image) = tm.get_thumbnail(path, 160).await {
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Left, image: image.clone() }).await;
+                                let _ = thumb_tx.send(ThumbnailResult { path: path.clone(), pane_side: PaneSide::Right, image }).await;
+                            }
+                            if let Some(image) = fm.get_image(path).await {
+                                let _ = hd_tx.send(FullImageResult { path: path.clone(), image }).await;
+                            }
+                        }
+                        if let Some(dir) = current_dir {
+                            let files = crate::engine::gallery::GalleryScanner::scan_directory(&dir).await;
+                            let _ = tx.send(ScanResult { 
+                                pane_side: side, 
+                                files, 
+                                invalidated_paths: vec![],
+                                transformed_paths: paths,
+                            }).await;
+                            ctx_clone.request_repaint();
+                        }
+                    });
+                }
+            }
+        }
+
+        // Handle auto-group progress
+        while let Ok(prog) = self.channels.ag_prog_rx.try_recv() {
+            match prog {
+                crate::messages::AutoGroupProgress::VirtualClustersUpdated { clusters } => {
+                    // Live update: push growing virtual clusters to result so the
+                    // Collections tab re-renders while the scan is still running.
+                    // Forces are (0,0,0) during streaming; final values arrive with AutoGroupResult.
+                    let existing_forces = self.auto_group_state.result
+                        .as_ref().map(|r| r.forces).unwrap_or((0.0, 0.0, 0.0));
+                    self.auto_group_state.result = Some(crate::messages::AutoGroupResult {
+                        clusters,
+                        forces: existing_forces,
+                    });
+                    self.active_pane_state().tab_mode = crate::ui::pane_state::TabMode::Collections;
+                }
+                other => {
+                    self.auto_group_state.progress = Some(other);
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        // Handle auto-group results
+        while let Ok(res) = self.channels.ag_res_rx.try_recv() {
+            let has_clusters = !res.clusters.is_empty();
+            self.auto_group_state.result = Some(res);
+            self.auto_group_state.is_running = false;
+            self.auto_group_state.auto_tune_running = false;
+            if has_clusters {
+                self.active_pane_state().tab_mode = crate::ui::pane_state::TabMode::Collections;
+            }
+            ctx.request_repaint();
+        }
+
+        // Handle auto-tune results
+        while let Ok(res) = self.channels.ag_tune_rx.try_recv() {
+            self.auto_group_state.eps = res.optimal_eps;
+            self.auto_group_state.auto_tune_running = false;
+            self.auto_group_state.is_running = false;
+            ctx.request_repaint();
+        }
+
+        // Handle duplicate results
+        while let Ok(res) = self.channels.dupes_rx.try_recv() {
+            self.duplicates = res.clusters;
+            self.active_pane_state().tab_mode = crate::ui::pane_state::TabMode::Duplicates;
+            ctx.request_repaint();
+        }
+    }
+
+    fn refresh_duplicates(&mut self, ctx: &egui::Context) {
+        let db = self.db.clone();
+        let tx = self.channels.dupes_tx.clone();
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            if let Ok(dupes) = db.get_duplicates().await {
+                let clusters: Vec<crate::messages::Cluster> = dupes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, members)| crate::messages::Cluster {
+                        id: i + 1,
+                        members,
+                        label: Some("Visual Match: Images with identical fingerprints".to_string()),
+                    })
+                    .collect();
+                let _ = tx.send(crate::messages::DuplicatesResult { clusters }).await;
+                ctx.request_repaint();
+            }
+        });
     }
 }
 
@@ -348,16 +731,26 @@ impl BildBlitzApp {
 
         if state.current_path.as_ref() != Some(&path) {
             state.current_path = Some(path.clone());
+            state.tab_mode = crate::ui::pane_state::TabMode::FolderView;
             let tx = self.channels.scan_tx.clone();
+            let audit_tx = self.channels.audit_tx.clone();
             let ctx = ctx.clone();
             tokio::spawn(async move {
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Scanning {:?}", path),
+                    success: true,
+                    message: None,
+                }).await;
+                
                 let files =
                     crate::engine::gallery::GalleryScanner::scan_directory(&path).await;
+                
                 let _ = tx
                     .send(ScanResult {
                         pane_side: side,
                         files,
-                        invalidated_path: None,
+                        invalidated_paths: vec![],
+                        transformed_paths: vec![],
                     })
                     .await;
                 ctx.request_repaint();
@@ -430,13 +823,31 @@ impl BildBlitzApp {
         }
 
         let tx = self.channels.scan_tx.clone();
+        let audit_tx = self.channels.audit_tx.clone();
         let ctx = ctx.clone();
         let current_dir = self.pane_state(side).current_path.clone();
 
         tokio::spawn(async move {
+            let _ = audit_tx.send(crate::messages::AuditMsg {
+                name: format!("Renaming {:?}", path.file_name().unwrap_or_default()),
+                success: true,
+                message: None,
+            }).await;
+
             // Use tokio::fs for non-blocking rename (B3 fix)
             if let Err(e) = tokio::fs::rename(&path, &dest).await {
                 tracing::error!("Rename failed for {:?} → {:?}: {}", path, dest, e);
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Rename Failed: {:?}", path.file_name().unwrap_or_default()),
+                    success: false,
+                    message: Some(e.to_string()),
+                }).await;
+            } else {
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Rename OK: {:?}", path.file_name().unwrap_or_default()),
+                    success: true,
+                    message: Some(format!("New name: {:?}", dest.file_name().unwrap_or_default())),
+                }).await;
             }
             if let Some(dir) = current_dir {
                 let files =
@@ -445,7 +856,8 @@ impl BildBlitzApp {
                     .send(ScanResult {
                         pane_side: side,
                         files,
-                        invalidated_path: None,
+                        invalidated_paths: vec![],
+                        transformed_paths: vec![],
                     })
                     .await;
                 ctx.request_repaint();
@@ -473,16 +885,31 @@ impl BildBlitzApp {
 
         let is_copy = ctx.input(|i| i.modifiers.command);
         let tx = self.channels.scan_tx.clone();
+        let audit_tx = self.channels.audit_tx.clone();
         let ctx = ctx.clone();
         
         // Capture paths for both panes to ensure a full UI refresh after move/copy
         let left_refresh = self.left_pane.current_path.clone();
         let right_refresh = self.right_pane.current_path.clone();
         
-        // Use dest_dir specifically for subfolder count invalidation
-        let invalidated_path = Some(dest_dir.clone());
+        // Collect all directories whose counts might have changed (B11 fix)
+        let mut invalidated_paths = vec![dest_dir.clone()];
+        for p in &source_paths {
+            if let Some(parent) = p.parent() {
+                invalidated_paths.push(parent.to_path_buf());
+            }
+        }
+        invalidated_paths.sort();
+        invalidated_paths.dedup();
 
+        let source_count = source_paths.len();
         tokio::spawn(async move {
+            let _ = audit_tx.send(crate::messages::AuditMsg {
+                name: format!("{} {} items to {:?}", if is_copy { "Copying" } else { "Moving" }, source_count, dest_dir.file_name().unwrap_or_default()),
+                success: true,
+                message: None,
+            }).await;
+
             for source_path in source_paths {
                 if source_path.parent() == Some(&dest_dir) {
                     continue; // Same folder, skip
@@ -534,7 +961,8 @@ impl BildBlitzApp {
                 let _ = tx.send(ScanResult {
                     pane_side: PaneSide::Left,
                     files,
-                    invalidated_path: if target_side == PaneSide::Left { invalidated_path.clone() } else { None },
+                    invalidated_paths: invalidated_paths.clone(),
+                    transformed_paths: vec![],
                 }).await;
             }
             if let Some(path) = right_refresh {
@@ -542,7 +970,8 @@ impl BildBlitzApp {
                 let _ = tx.send(ScanResult {
                     pane_side: PaneSide::Right,
                     files,
-                    invalidated_path: if target_side == PaneSide::Right { invalidated_path } else { None },
+                    invalidated_paths: invalidated_paths.clone(),
+                    transformed_paths: vec![],
                 }).await;
             }
             ctx.request_repaint();
@@ -613,12 +1042,23 @@ impl BildBlitzApp {
                 }
 
                 // UI Refresh Phase
+                let mut invalidated_paths = vec![dest_dir.clone()];
+                if let Some(ref cp) = left_refresh {
+                    invalidated_paths.push(cp.clone());
+                }
+                if let Some(ref cp) = right_refresh {
+                    invalidated_paths.push(cp.clone());
+                }
+                invalidated_paths.sort();
+                invalidated_paths.dedup();
+
                 if let Some(path) = left_refresh {
                     let files = crate::engine::gallery::GalleryScanner::scan_directory(&path).await;
                     let _ = tx.send(ScanResult {
                         pane_side: PaneSide::Left,
                         files,
-                        invalidated_path: if side == PaneSide::Left { Some(dest_dir.clone()) } else { None },
+                        invalidated_paths: invalidated_paths.clone(),
+                        transformed_paths: vec![],
                     }).await;
                 }
                 if let Some(path) = right_refresh {
@@ -626,7 +1066,8 @@ impl BildBlitzApp {
                     let _ = tx.send(ScanResult {
                         pane_side: PaneSide::Right,
                         files,
-                        invalidated_path: if side == PaneSide::Right { Some(dest_dir) } else { None },
+                        invalidated_paths: invalidated_paths.clone(),
+                        transformed_paths: vec![],
                     }).await;
                 }
                 ctx_clone.request_repaint();
@@ -671,7 +1112,8 @@ impl BildBlitzApp {
                     .send(ScanResult {
                         pane_side: side,
                         files,
-                        invalidated_path: None,
+                        invalidated_paths: vec![],
+                        transformed_paths: vec![],
                     })
                     .await;
                 ctx_clone.request_repaint();
@@ -774,6 +1216,25 @@ impl BildBlitzApp {
             }
         }
     }
+
+    fn handle_toolbar_action(&mut self, action: crate::messages::ToolbarAction, _ctx: &egui::Context) {
+        use crate::messages::{ToolbarAction, BackendMsg};
+        let paths: Vec<_> = self.active_pane_state().selected_files.iter().cloned().collect();
+        if paths.is_empty() { return; }
+
+        match action {
+            ToolbarAction::None => {}
+            ToolbarAction::Rotate(deg) => {
+                let _ = self.channels.backend_tx.try_send(BackendMsg::TransformRotate { paths, degrees: deg });
+            }
+            ToolbarAction::FlipH => {
+                let _ = self.channels.backend_tx.try_send(BackendMsg::TransformFlipH { paths });
+            }
+            ToolbarAction::FlipV => {
+                let _ = self.channels.backend_tx.try_send(BackendMsg::TransformFlipV { paths });
+            }
+        }
+    }
 }
 
 // ── UI Rendering ──────────────────────────────────────────────────────────────
@@ -785,7 +1246,13 @@ impl BildBlitzApp {
                 ui.heading("BildBlitz");
                 ui.separator();
 
-                crate::ui::tools::toolbar(ui);
+                let tb_action = crate::ui::tools::toolbar(ui);
+                self.handle_toolbar_action(tb_action, ctx);
+                ui.separator();
+
+                if ui.button("✨ Auto-Group").clicked() {
+                    self.auto_group_state.is_open = true;
+                }
                 ui.separator();
 
                 if ui
@@ -844,6 +1311,13 @@ impl BildBlitzApp {
                 ui.with_layout(
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
+                        if ui
+                            .selectable_label(self.is_audit_open, "🔍 Audit")
+                            .clicked()
+                        {
+                            self.is_audit_open = !self.is_audit_open;
+                        }
+
                         if ui
                             .selectable_label(self.log_view.is_open, "📋 Logs")
                             .clicked()
@@ -970,6 +1444,18 @@ impl BildBlitzApp {
 
     fn show_single_pane(&mut self, ui: &mut egui::Ui) {
         if let Some(path) = self.left_pane.current_path.clone() {
+            let has_collections = self.auto_group_state.result.is_some();
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.left_pane.tab_mode, crate::ui::pane_state::TabMode::FolderView, "📁 Folder View");
+                if has_collections {
+                    ui.selectable_value(&mut self.left_pane.tab_mode, crate::ui::pane_state::TabMode::Collections, "✨ Virtual Collections");
+                }
+                if ui.selectable_value(&mut self.left_pane.tab_mode, crate::ui::pane_state::TabMode::Duplicates, "👯 Duplicates").clicked() {
+                    let _ = self.channels.backend_tx.try_send(crate::messages::BackendMsg::DuplicatesRefresh);
+                }
+            });
+            ui.separator();
+
             Self::show_path_bar(ui, &path);
             ui.add_space(4.0);
 
@@ -981,8 +1467,22 @@ impl BildBlitzApp {
                 can_paste: !self.clipboard.is_empty(),
                 cut_paths: &self.clipboard.paths,
             };
-            let action =
-                self.left_grid.show(ui, &mut self.left_pane, &gctx);
+            
+            let action = match self.left_pane.tab_mode {
+                crate::ui::pane_state::TabMode::FolderView => {
+                    self.left_grid.show(ui, &mut self.left_pane, &gctx)
+                }
+                crate::ui::pane_state::TabMode::Collections => {
+                    if let Some(res) = &self.auto_group_state.result {
+                        self.left_grid.show_clusters(ui, &res.clusters, &mut self.left_pane, &gctx)
+                    } else {
+                        crate::ui::grid::GridAction::None
+                    }
+                }
+                crate::ui::pane_state::TabMode::Duplicates => {
+                    self.left_grid.show_clusters(ui, &self.duplicates, &mut self.left_pane, &gctx)
+                }
+            };
             self.handle_grid_action(action, PaneSide::Left, ui.ctx());
         } else {
             ui.centered_and_justified(|ui| {
@@ -1034,6 +1534,21 @@ impl BildBlitzApp {
 
             let current_path = self.pane_state(side).current_path.clone();
             if let Some(path) = current_path {
+                let has_collections = self.auto_group_state.result.is_some();
+                let mut tab_mode = self.pane_state(side).tab_mode;
+                
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut tab_mode, crate::ui::pane_state::TabMode::FolderView, "📁 Folder View");
+                    if has_collections {
+                        ui.selectable_value(&mut tab_mode, crate::ui::pane_state::TabMode::Collections, "✨ Virtual Collections");
+                    }
+                    if ui.selectable_value(&mut tab_mode, crate::ui::pane_state::TabMode::Duplicates, "👯 Duplicates").clicked() {
+                        let _ = self.channels.backend_tx.try_send(crate::messages::BackendMsg::DuplicatesRefresh);
+                    }
+                });
+                self.pane_state_mut(side).tab_mode = tab_mode;
+                ui.separator();
+
                 Self::show_path_bar(ui, &path);
                 ui.add_space(4.0);
 
@@ -1046,13 +1561,30 @@ impl BildBlitzApp {
                     cut_paths: &self.clipboard.paths,
                 };
 
+                let tab_mode_active = self.pane_state(side).tab_mode;
                 let (state, grid) = match side {
                     PaneSide::Left => (&mut self.left_pane, &mut self.left_grid),
                     PaneSide::Right => {
                         (&mut self.right_pane, &mut self.right_grid)
                     }
                 };
-                let action = grid.show(ui, state, &gctx);
+                
+                let action = match tab_mode_active {
+                    crate::ui::pane_state::TabMode::FolderView => {
+                        grid.show(ui, state, &gctx)
+                    }
+                    crate::ui::pane_state::TabMode::Collections => {
+                        if let Some(res) = &self.auto_group_state.result {
+                            grid.show_clusters(ui, &res.clusters, state, &gctx)
+                        } else {
+                            crate::ui::grid::GridAction::None
+                        }
+                    }
+                    crate::ui::pane_state::TabMode::Duplicates => {
+                        grid.show_clusters(ui, &self.duplicates, state, &gctx)
+                    }
+                };
+                
                 self.handle_grid_action(action, side, ui.ctx());
             } else {
                 let label = match side {
