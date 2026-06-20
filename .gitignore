@@ -1,6 +1,7 @@
 # --- Rust / Cargo ---
 # The target directory contains all compiled binary data
 target/
+target_old/
 **/*.o
 **/*.rlib
 **/*.pdb

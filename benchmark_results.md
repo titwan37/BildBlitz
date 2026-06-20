@@ -1,0 +1,13 @@
+# BildBlitz Benchmarking Results
+
+| Dataset | N | Heterogeneity | Algorithm | Time (ms) | Peak Mem (MB) | Clusters | Silhouette |
+|---|---|---|---|---|---|---|---|
+| Burst | 200 | 0.0202 | Batch DBSCAN | 12 | 0.313 | 1 | -1.0000 |
+| Burst | 200 | 0.0202 | Naive Streaming Leader | 3 | 0.003 | 28 | -0.2416 |
+| Burst | 200 | 0.0202 | Champion-Initialized Streaming | 4 | 0.002 | 14 | -0.2339 |
+| Timeline | 500 | 14.9316 | Batch DBSCAN | 38 | 1.926 | 2 | 0.0517 |
+| Timeline | 500 | 14.9316 | Naive Streaming Leader | 17 | 0.006 | 52 | -0.2887 |
+| Timeline | 500 | 14.9316 | Champion-Initialized Streaming | 14 | 0.003 | 23 | -0.2443 |
+| Chaos | 1000 | 1.2757 | Batch DBSCAN | 177 | 7.668 | 1 | -1.0000 |
+| Chaos | 1000 | 1.2757 | Naive Streaming Leader | 25 | 0.004 | 34 | -0.1950 |
+| Chaos | 1000 | 1.2757 | Champion-Initialized Streaming | 36 | 0.003 | 25 | -0.2516 |
