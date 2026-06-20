@@ -17,6 +17,7 @@ pub struct FileInfo {
     pub dimensions: Option<(u32, u32)>,
     pub modified: std::time::SystemTime,
     pub is_dir: bool,
+    pub phash: Option<String>,
 }
 
 pub struct GalleryScanner;
@@ -68,6 +69,7 @@ impl GalleryScanner {
                             dimensions: None,
                             modified,
                             is_dir: true,
+                            phash: None,
                         });
                     } else if metadata.is_file() && is_supported_image(&entry_path) {
                         items.push(FileInfo {
@@ -77,6 +79,7 @@ impl GalleryScanner {
                             dimensions: None,
                             modified,
                             is_dir: false,
+                            phash: None,
                         });
                     }
                 }
@@ -104,6 +107,7 @@ impl GalleryScanner {
                     dimensions: None,
                     modified: std::time::SystemTime::now(),
                     is_dir: true,
+                    phash: None,
                 },
             );
         }
@@ -122,13 +126,17 @@ impl GalleryScanner {
 
     fn count_images_blocking(path: &Path) -> usize {
         match std::fs::read_dir(path) {
-            Ok(entries) => entries
-                .filter_map(Result::ok)
-                .filter(|e| {
-                    e.metadata().map(|m| m.is_file()).unwrap_or(false)
-                        && is_supported_image(&e.path())
-                })
-                .count(),
+            Ok(entries) => {
+                let count = entries
+                    .filter_map(Result::ok)
+                    .filter(|e| {
+                        e.metadata().map(|m| m.is_file()).unwrap_or(false)
+                            && is_supported_image(&e.path())
+                    })
+                    .count();
+                info!("Counted {} images in directory: {:?}", count, path);
+                count
+            }
             Err(_) => 0,
         }
     }
@@ -143,6 +151,7 @@ struct ThumbnailManagerInner {
     memory_cache: Cache<PathBuf, Arc<egui::ColorImage>>,
     disk_cache_path: PathBuf,
     semaphore: Arc<Semaphore>,
+    audit_tx: Option<tokio::sync::mpsc::Sender<crate::messages::AuditMsg>>,
 }
 
 impl ThumbnailManager {
@@ -171,7 +180,14 @@ impl ThumbnailManager {
                     .build(),
                 disk_cache_path: cache_dir,
                 semaphore: Arc::new(Semaphore::new(6)),
+                audit_tx: None,
             }),
+        }
+    }
+
+    pub fn set_audit_tx(&mut self, tx: tokio::sync::mpsc::Sender<crate::messages::AuditMsg>) {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.audit_tx = Some(tx);
         }
     }
 
@@ -201,6 +217,9 @@ impl ThumbnailManager {
         match self.generate_thumbnail(path, size).await {
             Ok(img) => {
                 let arc_img: Arc<egui::ColorImage> = Arc::new(img);
+                
+                // Audit is now handled inside generate_thumbnail to capture format (B13 fix)
+
                 let cache_path_clone = cache_path.clone();
                 let arc_img_clone = arc_img.clone();
                 tokio::spawn(async move {
@@ -219,7 +238,30 @@ impl ThumbnailManager {
             }
             Err(e) => {
                 error!("Failed to generate thumbnail for {:?}: {}", path, e);
+                if let Some(tx) = &self.inner.audit_tx {
+                    let _ = tx.try_send(crate::messages::AuditMsg {
+                        name: format!("Thumbnail ERR: {:?}", path.file_name().unwrap_or_default()),
+                        success: false,
+                        message: Some(e.to_string()),
+                    });
+                }
                 None
+            }
+        }
+    }
+
+    pub async fn invalidate(&self, path: &Path) {
+        // Remove from memory cache
+        self.inner.memory_cache.remove(&path.to_path_buf()).await;
+
+        // Remove from disk cache (for all likely sizes)
+        // Note: size=160 is the default in GridView
+        let sizes = [160, 256, 512]; 
+        for &size in &sizes {
+            let cache_key = self.get_cache_key(path, size);
+            let cache_path = self.inner.disk_cache_path.join(&cache_key);
+            if cache_path.exists() {
+                let _ = tokio::fs::remove_file(cache_path).await;
             }
         }
     }
@@ -239,9 +281,29 @@ impl ThumbnailManager {
     ) -> anyhow::Result<egui::ColorImage> {
         let _permit = self.inner.semaphore.acquire().await?;
         let path = path.to_owned();
+        let audit_tx = self.inner.audit_tx.clone();
         tokio::task::spawn_blocking(move || {
-            let img = image::open(&path)
-                .with_context(|| format!("Failed to open image {:?}", path))?;
+            // Use ImageReader for more robust format detection (especially for GIF/UNC paths)
+            let file = std::fs::File::open(&path)
+                .with_context(|| format!("IO error opening {:?}", path))?;
+            
+            let reader = image::ImageReader::new(std::io::BufReader::new(file))
+                .with_guessed_format()
+                .with_context(|| format!("Failed to detect format for {:?}", path))?;
+            
+            let format = reader.format();
+            
+            if let Some(tx) = &audit_tx {
+                let _ = tx.try_send(crate::messages::AuditMsg {
+                    name: format!("Thumbnail OK: {:?} ({:?})", path.file_name().unwrap_or_default(), format),
+                    success: true,
+                    message: None,
+                });
+            }
+
+            let img = reader.decode()
+                .with_context(|| format!("Failed to decode image {:?}", path))?;
+            
             let thumbnail = img.thumbnail(size, size);
             let dims = [thumbnail.width() as usize, thumbnail.height() as usize];
             let pixels = thumbnail.to_rgba8().into_raw();
@@ -253,8 +315,13 @@ impl ThumbnailManager {
     async fn load_from_disk(path: &Path) -> anyhow::Result<egui::ColorImage> {
         let path = path.to_owned();
         tokio::task::spawn_blocking(move || {
-            let img = image::open(&path)
-                .with_context(|| format!("Failed to open cached thumbnail {:?}", path))?;
+            let file = std::fs::File::open(&path)
+                .with_context(|| format!("IO error opening cache {:?}", path))?;
+            let reader = image::ImageReader::new(std::io::BufReader::new(file))
+                .with_guessed_format()
+                .with_context(|| format!("Failed to detect cache format for {:?}", path))?;
+            let img = reader.decode()
+                .with_context(|| format!("Failed to decode cache image {:?}", path))?;
             let dims = [img.width() as usize, img.height() as usize];
             let pixels = img.to_rgba8().into_raw();
             Ok(egui::ColorImage::from_rgba_unmultiplied(dims, &pixels))
@@ -302,6 +369,10 @@ impl FullImageManager {
         }
     }
 
+    pub async fn invalidate(&self, path: &Path) {
+        self.memory_cache.remove(&path.to_path_buf()).await;
+    }
+
     pub async fn get_image(&self, path: &Path) -> Option<Arc<egui::ColorImage>> {
         if let Some(img) = self.memory_cache.get(&path.to_path_buf()).await {
             return Some(img);
@@ -326,8 +397,15 @@ impl FullImageManager {
         let _permit = self.semaphore.acquire().await?;
         let path = path.to_owned();
         tokio::task::spawn_blocking(move || {
-            let img = image::open(&path)
-                .with_context(|| format!("Failed to open image {:?}", path))?;
+            let file = std::fs::File::open(&path)
+                .with_context(|| format!("IO error opening {:?}", path))?;
+            let reader = image::ImageReader::new(std::io::BufReader::new(file))
+                .with_guessed_format()
+                .with_context(|| format!("Failed to detect format for {:?}", path))?;
+                
+            let img = reader.decode()
+                .with_context(|| format!("Failed to decode image {:?}", path))?;
+                
             let dims = [img.width() as usize, img.height() as usize];
             let pixels = img.to_rgba8().into_raw();
             Ok(egui::ColorImage::from_rgba_unmultiplied(dims, &pixels))

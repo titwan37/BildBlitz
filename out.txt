@@ -1,0 +1,96 @@
+    Checking BildBlitz v0.1.0 (C:\Dev\BildBlitz)
+warning: unused import: `std::sync::Arc`
+ --> src\engine\auto_group.rs:2:5
+  |
+2 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `linfa::traits::Fit`
+ --> src\engine\auto_group.rs:5:5
+  |
+5 | use linfa::traits::Fit;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `FromColor`
+ --> src\engine\auto_group.rs:8:15
+  |
+8 | use palette::{FromColor, IntoColor, Lab, Srgb};
+  |               ^^^^^^^^^
+
+warning: unused import: `egui::Ui`
+ --> src\ui\auto_group.rs:1:5
+  |
+1 | use egui::Ui;
+  |     ^^^^^^^^
+
+warning: unused import: `Cluster`
+ --> src\ui\auto_group.rs:4:76
+  |
+4 | use crate::messages::{AutoGroupConfig, AutoGroupProgress, AutoGroupResult, Cluster};
+  |                                                                            ^^^^^^^
+
+warning: unused import: `crate::engine::auto_group::run_auto_group`
+ --> src\ui\auto_group.rs:5:5
+  |
+5 | use crate::engine::auto_group::run_auto_group;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `DatasetBase<_, _>: From<ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>, f32>>` is not satisfied
+   --> src\engine\auto_group.rs:155:19
+    |
+155 |     let dataset = linfa::DatasetBase::from(data);
+    |                   ^^^^^^^^^^^^^^^^^^ the trait `From<ArrayBase<OwnedRepr<f32>, ndarray::Dim<[usize; 2]>, f32>>` is not implemented for `DatasetBase<_, _>`
+    |
+help: the following other types implement trait `From<T>`
+   --> C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\linfa-0.8.1\src\dataset\impl_dataset.rs:425:1
+    |
+425 | / impl<F, D: Data<Elem = F>, I: Dimension> From<ArrayBase<D, I>>
+426 | |     for DatasetBase<ArrayBase<D, I>, Array1<()>>
+    | |________________________________________________^ `DatasetBase<ArrayBase<D, I>, ArrayBase<OwnedRepr<()>, ...>>` implements `From<ndarray::ArrayBase<D, I>>`
+...
+440 | / impl<F, E, D, S, I: TargetDim> From<(ArrayBase<D, Ix2>, ArrayBase<S, I>)>
+441 | |     for DatasetBase<ArrayBase<D, Ix2>, ArrayBase<S, I>>
+442 | | where
+443 | |     D: Data<Elem = F>,
+444 | |     S: Data<Elem = E>,
+    | |______________________^ `DatasetBase<ArrayBase<D, Dim<[usize; 2]>>, ArrayBase<S, I>>` implements `From<(ArrayBase<D, Dim<[usize; 2]>>, ArrayBase<S, I>)>`
+    = note: the full name for the type has been written to 'C:\Dev\BildBlitz\target\debug\deps\BildBlitz-67f64073007a8809.long-type-14102808890157204558.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error[E0599]: no method named `transform` found for struct `DbscanParams<F, D, N>` in the current scope
+   --> src\engine\auto_group.rs:159:10
+    |
+157 |       let clusters = Dbscan::params(config.min_samples)
+    |  ____________________-
+158 | |         .tolerance(config.eps as f64)
+159 | |         .transform(&dataset)
+    | |_________-^^^^^^^^^
+    |
+   ::: C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\linfa-0.8.1\src\traits.rs:16:8
+    |
+ 16 |       fn transform(&self, x: R) -> T;
+    |          --------- the method is available for `DbscanParams<f64, linfa_nn::distance::L2Dist, linfa_nn::CommonNearestNeighbour>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: there is a method `transform_owned` with a similar name, but with different arguments
+   --> C:\Users\titwa\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\yoke-0.8.1\src\yokeable.rs:105:5
+    |
+105 |     fn transform_owned(self) -> Self::Output;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `Transformer` which provides `transform` is implemented but not in scope; perhaps you want to import it
+    |
+  1 + use linfa::prelude::Transformer;
+    |
+
+error[E0282]: type annotations needed
+   --> src\engine\auto_group.rs:168:18
+    |
+168 |         let id = cluster_id.unwrap_or(usize::MAX);
+    |                  ^^^^^^^^^^ cannot infer type
+
+Some errors have detailed explanations: E0277, E0282, E0599.
+For more information about an error, try `rustc --explain E0277`.
+warning: `BildBlitz` (bin "BildBlitz") generated 6 warnings
+error: could not compile `BildBlitz` (bin "BildBlitz") due to 3 previous errors; 6 warnings emitted

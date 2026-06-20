@@ -1,0 +1,92 @@
+[
+  {
+    "Dataset Name": "Burst",
+    "Image Count": 200,
+    "Heterogeneity Rate": 0.020248731631143616,
+    "Algorithm": "Batch DBSCAN",
+    "Time (ms)": 12,
+    "Peak Mem (MB)": 0.313,
+    "Cluster Count": 1,
+    "Silhouette Score": -1.0
+  },
+  {
+    "Dataset Name": "Burst",
+    "Image Count": 200,
+    "Heterogeneity Rate": 0.020248731631143616,
+    "Algorithm": "Naive Streaming Leader",
+    "Time (ms)": 3,
+    "Peak Mem (MB)": 0.003,
+    "Cluster Count": 28,
+    "Silhouette Score": -0.2416
+  },
+  {
+    "Dataset Name": "Burst",
+    "Image Count": 200,
+    "Heterogeneity Rate": 0.020248731631143616,
+    "Algorithm": "Champion-Initialized Streaming",
+    "Time (ms)": 4,
+    "Peak Mem (MB)": 0.002,
+    "Cluster Count": 14,
+    "Silhouette Score": -0.2339
+  },
+  {
+    "Dataset Name": "Timeline",
+    "Image Count": 500,
+    "Heterogeneity Rate": 14.931618930902149,
+    "Algorithm": "Batch DBSCAN",
+    "Time (ms)": 38,
+    "Peak Mem (MB)": 1.926,
+    "Cluster Count": 2,
+    "Silhouette Score": 0.0517
+  },
+  {
+    "Dataset Name": "Timeline",
+    "Image Count": 500,
+    "Heterogeneity Rate": 14.931618930902149,
+    "Algorithm": "Naive Streaming Leader",
+    "Time (ms)": 17,
+    "Peak Mem (MB)": 0.006,
+    "Cluster Count": 52,
+    "Silhouette Score": -0.2887
+  },
+  {
+    "Dataset Name": "Timeline",
+    "Image Count": 500,
+    "Heterogeneity Rate": 14.931618930902149,
+    "Algorithm": "Champion-Initialized Streaming",
+    "Time (ms)": 14,
+    "Peak Mem (MB)": 0.003,
+    "Cluster Count": 23,
+    "Silhouette Score": -0.2443
+  },
+  {
+    "Dataset Name": "Chaos",
+    "Image Count": 1000,
+    "Heterogeneity Rate": 1.2757235958268136,
+    "Algorithm": "Batch DBSCAN",
+    "Time (ms)": 177,
+    "Peak Mem (MB)": 7.668,
+    "Cluster Count": 1,
+    "Silhouette Score": -1.0
+  },
+  {
+    "Dataset Name": "Chaos",
+    "Image Count": 1000,
+    "Heterogeneity Rate": 1.2757235958268136,
+    "Algorithm": "Naive Streaming Leader",
+    "Time (ms)": 25,
+    "Peak Mem (MB)": 0.004,
+    "Cluster Count": 34,
+    "Silhouette Score": -0.195
+  },
+  {
+    "Dataset Name": "Chaos",
+    "Image Count": 1000,
+    "Heterogeneity Rate": 1.2757235958268136,
+    "Algorithm": "Champion-Initialized Streaming",
+    "Time (ms)": 36,
+    "Peak Mem (MB)": 0.003,
+    "Cluster Count": 25,
+    "Silhouette Score": -0.2516
+  }
+]
