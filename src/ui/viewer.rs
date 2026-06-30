@@ -8,6 +8,7 @@ pub enum ViewerAction {
     Prev,
     Close,
     JumpToIndex(usize),
+    SaveAs(PathBuf),
 }
 
 pub struct ImageViewer {
@@ -66,6 +67,10 @@ impl ImageViewer {
 
                 // Main Image Display
                 let current_file = &files[self.current_index];
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+                    action = ViewerAction::SaveAs(current_file.path.clone());
+                }
+
                 ui.scope_builder(
                     egui::UiBuilder::new().max_rect(screen_rect),
                     |ui| {
@@ -135,6 +140,21 @@ impl ImageViewer {
                                 .clicked()
                             {
                                 action = ViewerAction::Close;
+                            }
+
+                            ui.add_space(12.0);
+                            let save_as_btn = egui::Button::new(
+                                egui::RichText::new("💾 Save As").size(14.0)
+                            )
+                            .fill(egui::Color32::from_white_alpha(30))
+                            .stroke(egui::Stroke::NONE);
+
+                            if ui
+                                .add(save_as_btn)
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                action = ViewerAction::SaveAs(current_file.path.clone());
                             }
 
                             ui.with_layout(

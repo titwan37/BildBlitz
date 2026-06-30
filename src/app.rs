@@ -20,6 +20,14 @@ struct Notification {
     expire_time: f64,
 }
 
+struct SaveAsState {
+    is_open: bool,
+    original_path: PathBuf,
+    target_folder: PathBuf,
+    new_filename: String,
+    error_message: Option<String>,
+}
+
 // ── Channel Hub (CS1 fix: extracted from god-struct) ──────────────────────────
 
 struct ChannelHub {
@@ -137,6 +145,7 @@ pub struct BildBlitzApp {
     clipboard: ClipboardState,
     notification: Option<Notification>,
     is_tip_visible: bool,
+    save_as_state: Option<SaveAsState>,
     
     // Feature: Auto Group
     auto_group_state: crate::ui::auto_group::AutoGroupState,
@@ -179,6 +188,7 @@ impl BildBlitzApp {
             clipboard: ClipboardState::new(),
             notification: None,
             is_tip_visible: true,
+            save_as_state: None,
             auto_group_state: crate::ui::auto_group::AutoGroupState::new(),
             audit: crate::ui::audit::SystemAudit::new(),
             is_audit_open: false,
@@ -296,6 +306,8 @@ impl eframe::App for BildBlitzApp {
                     self.audit.show(ui);
                 });
         }
+
+        self.render_save_as_dialog(ctx);
     }
 }
 
@@ -792,6 +804,9 @@ impl BildBlitzApp {
             GridAction::Rename(path, new_name) => {
                 self.handle_rename(path, new_name, side, ctx);
             }
+            GridAction::SaveAs(path) => {
+                self.initiate_save_as(path);
+            }
             GridAction::Cut(paths) => {
                 self.clipboard.paths = paths.into_iter().collect();
             }
@@ -1213,6 +1228,9 @@ impl BildBlitzApp {
             }
             ViewerAction::Close => {
                 self.image_viewer.is_open = false;
+            }
+            ViewerAction::SaveAs(path) => {
+                self.initiate_save_as(path);
             }
         }
     }
@@ -1798,7 +1816,276 @@ impl BildBlitzApp {
             }
         });
     }
+
+    fn initiate_save_as(&mut self, original_path: PathBuf) {
+        let target_folder = original_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| {
+            self.pane_state(self.active_pane).current_path.clone().unwrap_or_default()
+        });
+        
+        let suggested_path = suggest_next_filename(&original_path);
+        let suggested_filename = suggested_path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| original_path.file_name().unwrap_or_default().to_string_lossy().to_string());
+
+        self.save_as_state = Some(SaveAsState {
+            is_open: true,
+            original_path,
+            target_folder,
+            new_filename: suggested_filename,
+            error_message: None,
+        });
+    }
+
+    fn execute_save_as(&mut self, ctx: &egui::Context) {
+        if let Some(state) = &self.save_as_state {
+            let dest_path = state.target_folder.join(&state.new_filename);
+            
+            if dest_path == state.original_path {
+                self.save_as_state.as_mut().unwrap().error_message = Some("Cannot save as the same file. Please choose a different name.".to_string());
+                return;
+            }
+
+            if dest_path.exists() {
+                self.save_as_state.as_mut().unwrap().error_message = Some("File already exists. Please choose a different name.".to_string());
+                return;
+            }
+
+            // Trigger the copy
+            let source_path = state.original_path.clone();
+            let dest_path_clone = dest_path.clone();
+            let tx = self.channels.scan_tx.clone();
+            let audit_tx = self.channels.audit_tx.clone();
+            let ctx_clone = ctx.clone();
+            
+            // Refreshes
+            let left_refresh = self.left_pane.current_path.clone();
+            let right_refresh = self.right_pane.current_path.clone();
+
+            tokio::spawn(async move {
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Save As: {:?}", dest_path_clone.file_name().unwrap_or_default()),
+                    success: true,
+                    message: Some(format!("Copying to {:?}", dest_path_clone)),
+                }).await;
+
+                match copy_with_metadata(&source_path, &dest_path_clone).await {
+                    Ok(_) => {
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: format!("Save As OK: {:?}", dest_path_clone.file_name().unwrap_or_default()),
+                            success: true,
+                            message: None,
+                        }).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Save As failed: {}", e);
+                        let _ = audit_tx.send(crate::messages::AuditMsg {
+                            name: format!("Save As Failed: {:?}", dest_path_clone.file_name().unwrap_or_default()),
+                            success: false,
+                            message: Some(e.to_string()),
+                        }).await;
+                    }
+                }
+
+                // Refresh the panes
+                if let Some(path) = left_refresh {
+                    let files = crate::engine::gallery::GalleryScanner::scan_directory(&path).await;
+                    let _ = tx.send(ScanResult {
+                        pane_side: PaneSide::Left,
+                        files,
+                        invalidated_paths: vec![dest_path_clone.parent().unwrap_or(&dest_path_clone).to_path_buf()],
+                        transformed_paths: vec![],
+                    }).await;
+                }
+                if let Some(path) = right_refresh {
+                    let files = crate::engine::gallery::GalleryScanner::scan_directory(&path).await;
+                    let _ = tx.send(ScanResult {
+                        pane_side: PaneSide::Right,
+                        files,
+                        invalidated_paths: vec![dest_path_clone.parent().unwrap_or(&dest_path_clone).to_path_buf()],
+                        transformed_paths: vec![],
+                    }).await;
+                }
+                ctx_clone.request_repaint();
+            });
+
+            // Close the dialog
+            self.save_as_state = None;
+        }
+    }
+
+    fn render_save_as_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let mut save_clicked = false;
+        let mut cancel_clicked = false;
+
+        if let Some(state) = &mut self.save_as_state {
+            if !state.is_open {
+                return;
+            }
+
+            egui::Window::new("💾 Save As")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .default_width(450.0)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        
+                        // Original file info
+                        ui.group(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(egui::RichText::new("Original File:").strong().size(12.0));
+                            ui.label(egui::RichText::new(state.original_path.to_string_lossy()).monospace().size(11.0));
+                        });
+                        
+                        ui.add_space(8.0);
+                        
+                        // Target directory info
+                        ui.group(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(egui::RichText::new("Target Folder:").strong().size(12.0));
+                            ui.label(egui::RichText::new(state.target_folder.to_string_lossy()).monospace().size(11.0));
+                        });
+
+                        ui.add_space(12.0);
+
+                        // New name input field
+                        ui.label(egui::RichText::new("New File Name:").strong().size(12.0));
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut state.new_filename)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace)
+                        );
+                        
+                        // Autofocus the input field when opened
+                        response.request_focus();
+
+                        if let Some(err) = &state.error_message {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(format!("⚠️ {}", err)).color(ui.visuals().error_fg_color));
+                        }
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        // Dialog actions
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let save_btn = egui::Button::new(
+                                    egui::RichText::new("Save").strong()
+                                )
+                                .fill(ui.visuals().selection.bg_fill)
+                                .stroke(egui::Stroke::NONE);
+
+                                if ui.add(save_btn).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    save_clicked = true;
+                                }
+
+                                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    cancel_clicked = true;
+                                }
+                            });
+                        });
+                    });
+                });
+
+            if !open || cancel_clicked {
+                self.save_as_state = None;
+            } else if save_clicked {
+                self.execute_save_as(ctx);
+            }
+        }
+    }
 }
+
+fn suggest_next_filename(original_path: &Path) -> PathBuf {
+    let parent = original_path.parent().unwrap_or_else(|| Path::new(""));
+    let extension = original_path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = original_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    
+    let mut base_stem = stem.clone();
+    let mut version_num = None;
+    let mut suffix_type = "_v";
+    
+    // Check for _v(\d+)
+    if let Some(idx) = stem.rfind("_v") {
+        if idx > 0 {
+            let num_str = &stem[idx + 2..];
+            if !num_str.is_empty() && num_str.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(num) = num_str.parse::<usize>() {
+                    base_stem = stem[..idx].to_string();
+                    version_num = Some(num);
+                    suffix_type = "_v";
+                }
+            }
+        }
+    }
+    
+    // If not found, check for _(\d+)
+    if version_num.is_none() {
+        if let Some(idx) = stem.rfind('_') {
+            if idx > 0 {
+                let num_str = &stem[idx + 1..];
+                if !num_str.is_empty() && num_str.chars().all(|c| c.is_ascii_digit()) {
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        base_stem = stem[..idx].to_string();
+                        version_num = Some(num);
+                        suffix_type = "_";
+                    }
+                }
+            }
+        }
+    }
+
+    // If not found, check for " (N)"
+    if version_num.is_none() {
+        if stem.ends_with(')') {
+            if let Some(idx) = stem.rfind(" (") {
+                if idx > 0 {
+                    let num_str = &stem[idx + 2..stem.len() - 1];
+                    if !num_str.is_empty() && num_str.chars().all(|c| c.is_ascii_digit()) {
+                        if let Ok(num) = num_str.parse::<usize>() {
+                            base_stem = stem[..idx].to_string();
+                            version_num = Some(num);
+                            suffix_type = " (";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut next_num = match version_num {
+        Some(n) => n + 1,
+        None => 1,
+    };
+
+    loop {
+        let proposed_name = if suffix_type == " (" {
+            if extension.is_empty() {
+                format!("{} ({})", base_stem, next_num)
+            } else {
+                format!("{} ({}).{}", base_stem, next_num, extension)
+            }
+        } else {
+            if extension.is_empty() {
+                format!("{}{}{}", base_stem, suffix_type, next_num)
+            } else {
+                format!("{}{}{}.{}", base_stem, suffix_type, next_num, extension)
+            }
+        };
+
+        let proposed_path = parent.join(&proposed_name);
+        if !proposed_path.exists() {
+            return proposed_path;
+        }
+        next_num += 1;
+    }
+}
+
 
 /// Robustly moves a file, falling back to copy+verify+delete for cross-volume moves.
 async fn robust_move_with_metadata(source: &Path, dest: &Path) -> std::io::Result<()> {
@@ -1869,4 +2156,45 @@ async fn copy_with_metadata(source: &Path, dest: &Path) -> std::io::Result<()> {
     .await
     .unwrap_or_else(|e| Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+
+    #[test]
+    fn test_suggest_next_filename() {
+        let temp_dir = std::env::temp_dir().join(format!("bb_test_{}", chrono::Utc::now().timestamp_micros()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Case 1: no existing version suffix
+        let original = temp_dir.join("photo.jpg");
+        let suggested = suggest_next_filename(&original);
+        assert_eq!(suggested.file_name().unwrap().to_str().unwrap(), "photo_v1.jpg");
+
+        // Create photo_v1.jpg
+        let _file = File::create(temp_dir.join("photo_v1.jpg")).unwrap();
+        let suggested2 = suggest_next_filename(&original);
+        assert_eq!(suggested2.file_name().unwrap().to_str().unwrap(), "photo_v2.jpg");
+
+        // Case 2: existing version suffix _v1
+        let original_v1 = temp_dir.join("photo_v1.jpg");
+        let suggested_v2 = suggest_next_filename(&original_v1);
+        assert_eq!(suggested_v2.file_name().unwrap().to_str().unwrap(), "photo_v2.jpg");
+
+        // Case 3: custom existing suffix like _1
+        let original_u1 = temp_dir.join("photo_1.jpg");
+        let suggested_u2 = suggest_next_filename(&original_u1);
+        assert_eq!(suggested_u2.file_name().unwrap().to_str().unwrap(), "photo_2.jpg");
+
+        // Case 4: custom existing suffix like " (1)"
+        let original_p1 = temp_dir.join("photo (1).jpg");
+        let suggested_p2 = suggest_next_filename(&original_p1);
+        assert_eq!(suggested_p2.file_name().unwrap().to_str().unwrap(), "photo (2).jpg");
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}
+
 

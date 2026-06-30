@@ -21,6 +21,7 @@ pub enum GridAction {
     Details(PathBuf),
     Cut(Vec<PathBuf>),
     Paste(Option<PathBuf>),
+    SaveAs(PathBuf),
 }
 
 /// Bundles the many parameters needed by GridView::show (CS10 fix).
@@ -296,6 +297,10 @@ impl GridView {
             if ui.button("✏ Rename (F2)").clicked() {
                 state.renaming_path = Some(file.path.clone());
                 state.rename_buffer = file.name.clone();
+                ui.close();
+            }
+            if ui.button("💾 Save As...").clicked() {
+                action = Some(GridAction::SaveAs(file.path.clone()));
                 ui.close();
             }
         }
