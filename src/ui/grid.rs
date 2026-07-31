@@ -22,6 +22,7 @@ pub enum GridAction {
     Cut(Vec<PathBuf>),
     Paste(Option<PathBuf>),
     SaveAs(PathBuf),
+    SmartSubfolder(Vec<PathBuf>),
 }
 
 /// Bundles the many parameters needed by GridView::show (CS10 fix).
@@ -108,6 +109,24 @@ impl GridView {
                 );
 
                 bg_response.context_menu(|ui| {
+                    let selected_images: Vec<PathBuf> = state
+                        .selected_files
+                        .iter()
+                        .cloned()
+                        .filter(|p| crate::engine::supported::is_supported_image(p))
+                        .collect();
+
+                    if selected_images.len() >= 2 {
+                        if ui
+                            .button("📁 Move to New Folder with Smart Naming")
+                            .clicked()
+                        {
+                            action = GridAction::SmartSubfolder(selected_images);
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
+
                     if ui
                         .add_enabled(gctx.can_paste, egui::Button::new("📋 Paste"))
                         .clicked()
@@ -271,6 +290,31 @@ impl GridView {
         can_paste: bool,
     ) -> Option<GridAction> {
         let mut action = None;
+
+        let selected_images: Vec<PathBuf> = if state.selected_files.contains(&file.path) {
+            state
+                .selected_files
+                .iter()
+                .cloned()
+                .filter(|p| crate::engine::supported::is_supported_image(p))
+                .collect()
+        } else if crate::engine::supported::is_supported_image(&file.path) {
+            vec![file.path.clone()]
+        } else {
+            vec![]
+        };
+
+        if selected_images.len() >= 2 {
+            if ui
+                .button("📁 Move to New Folder with Smart Naming")
+                .clicked()
+            {
+                action = Some(GridAction::SmartSubfolder(selected_images));
+                ui.close();
+            }
+            ui.separator();
+        }
+
         if ui.button("🖼 Open in Gallery").clicked() {
             action = Some(GridAction::Open(file.path.clone()));
             ui.close();

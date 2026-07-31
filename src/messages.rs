@@ -35,6 +35,7 @@ pub enum NavAction {
     None,
     Navigate(PathBuf),
     PasteInto(PathBuf),
+    Rename(PathBuf, String),
 }
 
 /// Actions originating from the top toolbar.
@@ -43,6 +44,8 @@ pub enum ToolbarAction {
     Rotate(u16),
     FlipH,
     FlipV,
+    InitiateRenameNav(PathBuf),
+    InitiateRenameGrid(PathBuf, crate::ui::pane_state::PaneSide),
 }
 
 /// Configuration for the auto-grouping clustering task.

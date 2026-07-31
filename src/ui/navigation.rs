@@ -8,8 +8,10 @@ pub struct NavigationPane {
     quick_access: Vec<(String, PathBuf, usize)>,
     favorites: Vec<(Favorite, usize)>,
     local_drives: Vec<(String, PathBuf, usize)>,
-    selected_path: Option<PathBuf>,
-    expanded_dirs: HashMap<PathBuf, Vec<PathBuf>>,
+    pub selected_path: Option<PathBuf>,
+    pub expanded_dirs: HashMap<PathBuf, Vec<PathBuf>>,
+    pub renaming_path: Option<PathBuf>,
+    pub rename_buffer: String,
 }
 
 impl NavigationPane {
@@ -44,6 +46,8 @@ impl NavigationPane {
             local_drives,
             selected_path: None,
             expanded_dirs: HashMap::new(),
+            renaming_path: None,
+            rename_buffer: String::new(),
         }
     }
 
@@ -130,18 +134,45 @@ impl NavigationPane {
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
 
         state.show_header(ui, |ui| {
-            let response = ui.selectable_label(is_selected, label);
-            if response.clicked() {
-                self.selected_path = Some(path.to_path_buf());
-                action = Some(NavAction::Navigate(path.to_path_buf()));
-            }
-
-            response.context_menu(|ui| {
-                if ui.add_enabled(can_paste, egui::Button::new("📋 Paste Into")).clicked() {
-                    action = Some(NavAction::PasteInto(path.to_path_buf()));
-                    ui.close();
+            if self.renaming_path.as_deref() == Some(path) {
+                let id_salt = ui.id().with("rename_input_nav");
+                let response = egui::TextEdit::singleline(&mut self.rename_buffer)
+                    .id_salt(id_salt)
+                    .show(ui)
+                    .response;
+                
+                response.request_focus();
+                
+                if response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        action = Some(NavAction::Rename(
+                            path.to_path_buf(),
+                            self.rename_buffer.clone(),
+                        ));
+                    }
+                    self.renaming_path = None;
+                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.renaming_path = None;
                 }
-            });
+            } else {
+                let response = ui.selectable_label(is_selected, label);
+                if response.clicked() {
+                    self.selected_path = Some(path.to_path_buf());
+                    action = Some(NavAction::Navigate(path.to_path_buf()));
+                }
+
+                response.context_menu(|ui| {
+                    if ui.button("✏ Rename").clicked() {
+                        self.renaming_path = Some(path.to_path_buf());
+                        self.rename_buffer = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        ui.close();
+                    }
+                    if ui.add_enabled(can_paste, egui::Button::new("📋 Paste Into")).clicked() {
+                        action = Some(NavAction::PasteInto(path.to_path_buf()));
+                        ui.close();
+                    }
+                });
+            }
         }).body(|ui| {
             // Lazy load children
             let children = self.expanded_dirs.entry(path.to_path_buf()).or_insert_with(|| {

@@ -18,6 +18,24 @@ async fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--smart-folder") {
+        let paths: Vec<std::path::PathBuf> = args
+            .iter()
+            .skip_while(|arg| *arg != "--smart-folder")
+            .skip(1)
+            .map(std::path::PathBuf::from)
+            .collect();
+
+        if !paths.is_empty() {
+            match crate::engine::smart_folder::execute_smart_subfolder(&paths, None).await {
+                Ok(res) => println!("Created smart subfolder: {:?}", res.target_folder),
+                Err(e) => eprintln!("Error creating smart subfolder: {}", e),
+            }
+            return Ok(());
+        }
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])

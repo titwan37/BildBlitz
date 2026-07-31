@@ -270,6 +270,9 @@ impl eframe::App for BildBlitzApp {
                         let source_paths = self.clipboard.take();
                         self.handle_drop(source_paths, Some(path), self.active_pane, ctx);
                     }
+                    NavAction::Rename(old_path, new_name) => {
+                        self.handle_folder_rename(old_path, new_name, ctx);
+                    }
                     NavAction::None => {}
                 }
             });
@@ -816,7 +819,82 @@ impl BildBlitzApp {
                     self.handle_drop(source_paths, target_path, side, ctx);
                 }
             }
+            GridAction::SmartSubfolder(paths) => {
+                self.handle_smart_subfolder(paths, side, ctx);
+            }
         }
+    }
+
+    /// Handles smart subfolder creation and multi-file relocation.
+    fn handle_smart_subfolder(
+        &mut self,
+        paths: Vec<PathBuf>,
+        side: PaneSide,
+        ctx: &egui::Context,
+    ) {
+        if paths.len() < 2 {
+            return;
+        }
+
+        let current_dir = self.pane_state(side).current_path.clone();
+        let tx = self.channels.scan_tx.clone();
+        let audit_tx = self.channels.audit_tx.clone();
+        let ctx = ctx.clone();
+
+        tokio::spawn(async move {
+            let _ = audit_tx
+                .send(crate::messages::AuditMsg {
+                    name: "Smart Subfolder".to_string(),
+                    success: true,
+                    message: Some(format!("Processing {} selected image files", paths.len())),
+                })
+                .await;
+
+            match crate::engine::smart_folder::execute_smart_subfolder(&paths, None).await {
+                Ok(result) => {
+                    let mut msg = format!(
+                        "Created folder '{}' and moved {} image file(s).",
+                        result.folder_name,
+                        result.moved_files.len()
+                    );
+                    if !result.failed_files.is_empty() {
+                        msg.push_str(&format!(" (Failed to move {} file(s))", result.failed_files.len()));
+                    }
+
+                    let _ = audit_tx
+                        .send(crate::messages::AuditMsg {
+                            name: "Smart Subfolder Created".to_string(),
+                            success: result.failed_files.is_empty(),
+                            message: Some(msg),
+                        })
+                        .await;
+
+                    if let Some(dir) = current_dir {
+                        let files =
+                            crate::engine::gallery::GalleryScanner::scan_directory(&dir).await;
+                        let _ = tx
+                            .send(ScanResult {
+                                pane_side: side,
+                                files,
+                                invalidated_paths: vec![],
+                                transformed_paths: vec![],
+                            })
+                            .await;
+                        ctx.request_repaint();
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Smart Subfolder action failed: {}", e);
+                    let _ = audit_tx
+                        .send(crate::messages::AuditMsg {
+                            name: "Smart Subfolder Failed".to_string(),
+                            success: false,
+                            message: Some(e.to_string()),
+                        })
+                        .await;
+                }
+            }
+        });
     }
 
     /// Handles file rename with proper async I/O (B3 fix).
@@ -878,6 +956,95 @@ impl BildBlitzApp {
                 ctx.request_repaint();
             }
         });
+    }
+
+    fn handle_folder_rename(&mut self, path: PathBuf, new_name: String, ctx: &egui::Context) {
+        let new_name = new_name.trim().to_string();
+        if new_name.is_empty() {
+            return;
+        }
+
+        let invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+        if new_name.contains(&invalid_chars[..]) {
+            let _ = self.channels.audit_tx.try_send(crate::messages::AuditMsg {
+                name: format!("Rename Failed: {:?}", path.file_name().unwrap_or_default()),
+                success: false,
+                message: Some("Folder name contains invalid characters".to_string()),
+            });
+            return;
+        }
+
+        let mut dest = path.clone();
+        dest.set_file_name(&new_name);
+
+        if dest == path {
+            return;
+        }
+        if dest.exists() {
+            let _ = self.channels.audit_tx.try_send(crate::messages::AuditMsg {
+                name: format!("Rename Failed: {:?}", path.file_name().unwrap_or_default()),
+                success: false,
+                message: Some("Destination folder already exists".to_string()),
+            });
+            return;
+        }
+
+        let ctx_clone = ctx.clone();
+        let audit_tx = self.channels.audit_tx.clone();
+        
+        let path_clone = path.clone();
+        let dest_clone = dest.clone();
+        tokio::spawn(async move {
+            if let Err(e) = tokio::fs::rename(&path_clone, &dest_clone).await {
+                tracing::error!("Folder rename failed for {:?} → {:?}: {}", path_clone, dest_clone, e);
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Rename Failed: {:?}", path_clone.file_name().unwrap_or_default()),
+                    success: false,
+                    message: Some(e.to_string()),
+                }).await;
+            } else {
+                let _ = audit_tx.send(crate::messages::AuditMsg {
+                    name: format!("Rename OK: {:?}", path_clone.file_name().unwrap_or_default()),
+                    success: true,
+                    message: Some(format!("New name: {:?}", dest_clone.file_name().unwrap_or_default())),
+                }).await;
+            }
+            ctx_clone.request_repaint();
+        });
+
+        // Optimistically update internal state
+        if self.navigation.selected_path.as_deref() == Some(&path) {
+            self.navigation.selected_path = Some(dest.clone());
+        }
+        if let Some(children) = self.navigation.expanded_dirs.remove(&path) {
+            self.navigation.expanded_dirs.insert(dest.clone(), children);
+        }
+        
+        let parent = path.parent().map(|p| p.to_path_buf());
+        if let Some(parent) = parent {
+            self.navigation.expanded_dirs.remove(&parent);
+            if self.left_pane.current_path.as_deref() == Some(&parent) {
+                self.trigger_scan(parent.clone(), crate::ui::pane_state::PaneSide::Left, ctx);
+            }
+            if self.right_pane.current_path.as_deref() == Some(&parent) {
+                self.trigger_scan(parent.clone(), crate::ui::pane_state::PaneSide::Right, ctx);
+            }
+        }
+        
+        let update_pane = |pane: &mut crate::ui::pane_state::PaneState| {
+            if pane.current_path.as_deref() == Some(&path) {
+                pane.current_path = Some(dest.clone());
+            } else if let Some(ref cur) = pane.current_path {
+                if cur.starts_with(&path) {
+                    if let Ok(suffix) = cur.strip_prefix(&path) {
+                        pane.current_path = Some(dest.join(suffix));
+                    }
+                }
+            }
+        };
+        
+        update_pane(&mut self.left_pane);
+        update_pane(&mut self.right_pane);
     }
 
     /// Handles file drop/move/copy with safe path handling (B1, B4, S2 fixes).
@@ -1237,6 +1404,22 @@ impl BildBlitzApp {
 
     fn handle_toolbar_action(&mut self, action: crate::messages::ToolbarAction, _ctx: &egui::Context) {
         use crate::messages::{ToolbarAction, BackendMsg};
+
+        match action {
+            ToolbarAction::InitiateRenameNav(path) => {
+                self.navigation.renaming_path = Some(path.clone());
+                self.navigation.rename_buffer = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                return;
+            }
+            ToolbarAction::InitiateRenameGrid(path, side) => {
+                let state = self.pane_state_mut(side);
+                state.renaming_path = Some(path.clone());
+                state.rename_buffer = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                return;
+            }
+            _ => {}
+        }
+
         let paths: Vec<_> = self.active_pane_state().selected_files.iter().cloned().collect();
         if paths.is_empty() { return; }
 
@@ -1251,6 +1434,7 @@ impl BildBlitzApp {
             ToolbarAction::FlipV => {
                 let _ = self.channels.backend_tx.try_send(BackendMsg::TransformFlipV { paths });
             }
+            _ => unreachable!(),
         }
     }
 }
@@ -1264,7 +1448,21 @@ impl BildBlitzApp {
                 ui.heading("BildBlitz");
                 ui.separator();
 
-                let tb_action = crate::ui::tools::toolbar(ui);
+                let active_nav_folder = self.navigation.selected_path.clone();
+                let active_left_grid = if self.left_pane.selected_files.len() == 1 {
+                    let path = self.left_pane.selected_files.iter().next().unwrap();
+                    if self.left_pane.files.iter().any(|f| &f.path == path && f.is_dir) {
+                        Some(path.clone())
+                    } else { None }
+                } else { None };
+                let active_right_grid = if self.right_pane.selected_files.len() == 1 {
+                    let path = self.right_pane.selected_files.iter().next().unwrap();
+                    if self.right_pane.files.iter().any(|f| &f.path == path && f.is_dir) {
+                        Some(path.clone())
+                    } else { None }
+                } else { None };
+
+                let tb_action = crate::ui::tools::toolbar(ui, active_nav_folder, active_left_grid, active_right_grid);
                 self.handle_toolbar_action(tb_action, ctx);
                 ui.separator();
 

@@ -1,13 +1,28 @@
 // src/server/mod.rs
 
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use crate::library::db::DatabaseManager;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Serialize)]
 struct Stats {
     total_images: i64,
     total_collections: i64,
+}
+
+#[derive(Deserialize)]
+struct SmartFolderPayload {
+    paths: Vec<String>,
+}
+
+#[post("/api/smart-folder")]
+async fn create_smart_folder(req: web::Json<SmartFolderPayload>) -> impl Responder {
+    let path_bufs: Vec<PathBuf> = req.paths.iter().map(PathBuf::from).collect();
+    match crate::engine::smart_folder::execute_smart_subfolder(&path_bufs, None).await {
+        Ok(result) => HttpResponse::Ok().json(result),
+        Err(e) => HttpResponse::BadRequest().body(e.to_string()),
+    }
 }
 
 #[get("/stats")]
@@ -32,7 +47,7 @@ async fn get_stats(db: web::Data<DatabaseManager>) -> impl Responder {
 
 #[get("/")]
 async fn index() -> impl Responder {
-    HttpResponse::Ok().body("BildBlitz API is running. Try /stats")
+    HttpResponse::Ok().body("BildBlitz API is running. Try /stats or POST /api/smart-folder")
 }
 
 pub fn start_server(db: DatabaseManager) -> std::io::Result<actix_web::dev::Server> {
@@ -45,6 +60,7 @@ pub fn start_server(db: DatabaseManager) -> std::io::Result<actix_web::dev::Serv
             .app_data(db_data.clone())
             .service(index)
             .service(get_stats)
+            .service(create_smart_folder)
     })
     .bind(("127.0.0.1", 8080))?
     .run();
