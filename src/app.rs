@@ -498,7 +498,7 @@ impl BildBlitzApp {
                             }
                         }
                         // Just clear it by sending an empty result when done
-                        let _ = res_tx.send(crate::messages::AutoGroupResult { clusters: vec![], forces: (0.0, 0.0, 0.0) }).await;
+                        let _ = res_tx.send(crate::messages::AutoGroupResult { clusters: vec![], forces: Default::default(), perf: None }).await;
                     });
                 }
                 crate::messages::BackendMsg::AutoGroupTuneEpsilon(config) => {
@@ -674,10 +674,13 @@ impl BildBlitzApp {
                     // Collections tab re-renders while the scan is still running.
                     // Forces are (0,0,0) during streaming; final values arrive with AutoGroupResult.
                     let existing_forces = self.auto_group_state.result
-                        .as_ref().map(|r| r.forces).unwrap_or((0.0, 0.0, 0.0));
+                        .as_ref().map(|r| r.forces).unwrap_or_default();
+                    let existing_perf = self.auto_group_state.result
+                        .as_ref().and_then(|r| r.perf.clone());
                     self.auto_group_state.result = Some(crate::messages::AutoGroupResult {
                         clusters,
                         forces: existing_forces,
+                        perf: existing_perf,
                     });
                     self.active_pane_state().tab_mode = crate::ui::pane_state::TabMode::Collections;
                 }
@@ -853,10 +856,15 @@ impl BildBlitzApp {
             match crate::engine::smart_folder::execute_smart_subfolder(&paths, None).await {
                 Ok(result) => {
                     let mut msg = format!(
-                        "Created folder '{}' and moved {} image file(s).",
+                        "Created smart folder '{}' ({} images organized into {} cluster(s)).",
                         result.folder_name,
-                        result.moved_files.len()
+                        result.moved_files.len(),
+                        result.clusters.len().max(1),
                     );
+                    let total_culled: usize = result.clusters.iter().map(|c| c.culled_shots.len()).sum();
+                    if total_culled > 0 {
+                        msg.push_str(&format!(" [Culling: {} burst duplicate(s) isolated]", total_culled));
+                    }
                     if !result.failed_files.is_empty() {
                         msg.push_str(&format!(" (Failed to move {} file(s))", result.failed_files.len()));
                     }

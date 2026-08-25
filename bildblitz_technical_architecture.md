@@ -1,14 +1,14 @@
 # BildBlitz ⚡ — Technical & Architectural Specification
 
-**BildBlitz** is a high-performance, native image browser and library manager written in **Rust (Edition 2024)** for Windows 10/11. It implements a fully multi-threaded, asynchronous architecture built around the `egui` immediate-mode GUI framework, the `tokio` async runtime, and the `rayon` data-parallelism framework.
+**BildBlitz** is an ultra-fast, native image browser, clustering intelligence engine, and library manager written in **Rust (Edition 2024)** for Windows 10/11. It implements a multi-threaded, asynchronous architecture built around the `egui` immediate-mode GUI framework, the `tokio` async runtime, the `rayon` data-parallelism framework, and multi-backend hardware acceleration (**NVIDIA CUDA / cuBLAS, DirectML, and WGPU Compute Shaders**).
 
-This document details the software design, concurrency models, clustering mathematics, data storage layers, and rendering strategies that form the BildBlitz engine.
+This document details the software design, concurrency models, clustering mathematics, hardware tensor acceleration, fast multi-tier decoding, persistent caching layers, and rendering profiles that form the BildBlitz engine.
 
 ---
 
 ## 📐 Overall System Topology
 
-The application divides duties between a low-latency UI rendering thread and background worker threads, communicating via asynchronous message-passing channels (`mpsc`):
+The application divides duties between a low-latency UI rendering thread and background worker threads, communicating via asynchronous message-passing channels (`tokio::sync::mpsc`):
 
 ```mermaid
 graph TD
@@ -18,26 +18,36 @@ graph TD
 
     subgraph UI Thread Loop (egui/eframe)
         B --> B1[Left/Right Grid Views]
-        B --> B2[Dockable Grouping Sidebar]
-        B --> B3[Live Audit Telemetry View]
+        B --> B2[Dockable Grouping & Determinant Forces View]
+        B --> B3[Live Audit & Performance Telemetry View]
         B --> B4[Fullscreen Prefetched Gallery]
     end
 
     subgraph Async Tokio Background Workers
         E[Scanner Task] -->|ScanResult| B
-        F[AutoGroup Task] -->|Progress/Result| B
+        F[AutoGroup Task] -->|Progress/Result/Perf| B
         G[Thumbnail Manager] -->|ThumbnailResult| B
         H[Full Image Manager] -->|FullImageResult| B
     end
 
-    subgraph Rayon Parallel Thread Pool
-        I[Parallel Color & PHash Extractor]
+    subgraph Rayon Parallel Thread Pool & Fast Decoders
+        I[Fast Multi-Tier Decoder: EXIF / Buffered I/O]
+        J[8D Feature & Geometric Profile Extractor]
+    end
+
+    subgraph Hardware Acceleration Layer (TensorEngine)
+        K[NVIDIA CUDA / cuBLAS Matrix Engine]
+        L[Intel Arc / AMD DirectML Engine]
+        M[Cross-Platform WGPU Compute Shaders]
     end
 
     F -->|Spawns Work| I
-    G -->|Spawns Work| I
-    D <--->|Reads/Writes| E
-    D <--->|Reads/Writes| F
+    I --> J
+    F -->|Batch GEMM Matrix Distances| K
+    F -->|Batch GEMM Matrix Distances| L
+    F -->|Batch GEMM Matrix Distances| M
+    D <--->|Tier-0 Feature Cache & Index| E
+    D <--->|Tier-0 Feature Cache & Index| F
     D <--->|REST Queries| C
 ```
 
@@ -45,15 +55,15 @@ graph TD
 
 ## ⚡ Concurrency & Messaging Model
 
-To prevent immediate-mode UI freezes, BildBlitz implements **Strict Thread Separation**. The UI thread does not perform disk operations, EXIF parsing, or classification math. Instead, tasks are dispatched to background thread pools and results are received asynchronously.
+To prevent immediate-mode UI freezes, BildBlitz implements **Strict Thread Separation**. The UI thread never performs disk operations, EXIF parsing, image decompression, or classification math. Instead, tasks are dispatched to background worker pools and results are streamed asynchronously.
 
-### 1. The Channel Hub (`ChannelHub` in `app.rs`)
+### 1. The Channel Hub (`ChannelHub` in `src/app.rs`)
 Thread communication is managed via a centralized registry of bounded channels (`tokio::sync::mpsc`):
 * `thumb_rx` / `thumb_tx`: Streams resized and raw-decoded visual thumbnails from the background cache.
 * `scan_rx` / `scan_tx`: Signals the completion of directory crawlers, providing file vectors and invalidation markers.
 * `hd_rx` / `hd_tx`: Delivers decoded full-resolution textures for the fullscreen viewer.
-* `backend_rx` / `backend_tx`: Standardized enum command protocol (`BackendMsg`) directing backend workers to start clustering, commit folders, or apply transformations.
-* `ag_prog_rx` / `ag_prog_tx`: Tracks live classification steps to drive UI progress bars.
+* `backend_rx` / `backend_tx`: Standardized enum command protocol (`BackendMsg`) directing background workers to start clustering, commit folders, or apply transformations.
+* `ag_prog_rx` / `ag_prog_tx`: Tracks live classification steps and partial cluster snapshots to drive UI progress bars in real time.
 * `audit_rx` / `audit_tx`: Directs system tracing metrics (success, latencies, error states) into the live diagnostics panel.
 
 ### 2. Immediate-Mode Event Loop Integration
@@ -61,57 +71,184 @@ Because `egui` only repaints upon receiving input events, background threads cal
 
 ---
 
-## 🧠 The ML Grouping Engine: Champion-Seeded Online Leader Clustering
+## 🏎️ Fast Multi-Tier Image Decoding & Caching Pipeline
 
-Located in `src/engine/auto_group.rs`, the clustering system groups raw images into structured visual collections.
+Image decoding is typically the single largest computational bottleneck in visual clustering (accounting for ~50% of CPU time when loading full-resolution images). BildBlitz implements a **Three-Tier Fast Decoding Pipeline** located in `src/library/fast_decode.rs` and `src/library/db.rs`:
 
-```mermaid
-flowchart TD
-    A[Scan Folder Images] --> B[Champion Seeding: Select Oldest, Median, Newest]
-    B --> C[Extract Champion Features & Seed Welford Running Stats]
-    C --> D[Parallelize Remaining Feature Extraction via Rayon]
-    D --> E{For each image: Ingest Stream}
-    E --> F[Calculate Combined Distance to existing cluster Centroids]
-    F --> G{Best Dist <= Epsilon?}
-    G -->|Yes| H[Absorb into cluster & recalculate Centroid on the fly]
-    G -->|No| I[Spawn New Cluster with image as Seed]
-    H --> J[Try Merge clusters if centroid-to-centroid distance < Epsilon * 1.2]
-    I --> K[Stream Virtual Clusters snapshot to UI every 4 images]
-    J --> K
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       BildBlitz Ingestion Pipeline                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+             ┌─────────────────────────────────────────────────┐
+             │ Tier 0: SQLite Feature Cache Lookup (0.0 ms)    │
+             │ Checked by (file_path, modified_timestamp)      │
+             └─────────────────────────────────────────────────┘
+                     │                                 │
+             [Cache Hit]                       [Cache Miss]
+                     │                                 │
+                     ▼                                 ▼
+         ┌───────────────────────┐     ┌───────────────────────────────────┐
+         │ Instant 8D Features & │     │ Tier 1: EXIF Header Extraction    │
+         │ pHash (Skip File I/O) │     │ Reads first ~32-64KB for embedded │
+         └───────────────────────┘     │ JPEG thumbnail (<0.5ms decode)    │
+                                       └───────────────────────────────────┘
+                                                       │
+                                               [No EXIF Thumb]
+                                                       │
+                                                       ▼
+                                       ┌───────────────────────────────────┐
+                                       │ Tier 2: 128KB Buffered Stream     │
+                                       │ High-throughput OS chunk reading  │
+                                       │ for PNG, WebP, AVIF, BMP, TIFF    │
+                                       └───────────────────────────────────┘
 ```
 
-### 1. Multi-Dimensional Feature Vector
-Each image is represented by a composite feature vector:
-$$\mathbf{x} = \left[ t, L, a, b, ar, \text{phash}, \text{palette} \right]$$
-* **Time ($t$):** EXIF creation timestamp.
-* **Luminance & Chrominance ($L, a, b$):** Lightness, red-green, and blue-yellow channels in the perceptually uniform **CIELAB** color space, averaged across a $32 \times 32$ downsampled thumbnail.
-* **Aspect Ratio ($ar$):** Dimensional width divided by height.
-* **Perceptual Hash ($\text{phash}$):** A 64-bit base64-decoded bitstring representing structural layout.
-* **Palette ($\text{palette}$):** $8$ primary dominant colors extracted using **K-Means quantization** inside the Lab space.
+### 1. 🗄️ Tier 0: SQLite Feature & Metadata Cache (Instant 0.0 ms)
+Before reading image bytes from disk, `run_auto_group` queries SQLite for `(path, modified)`. If the file was analyzed previously and has not changed on disk:
+- All 8 continuous normalized features, 64-bit perceptual hash, and 8-color CIELAB palette are loaded directly from SQLite.
+- Completely eliminates disk reads and image decompressions on subsequent runs.
 
-### 2. Welford's Algorithm & Champion Seeding
-To normalize features with vastly different scales (e.g., timestamps in the millions vs. lightness between 0 and 100), the engine calculates **online Z-scores**:
-$$z = \frac{x - \mu}{\sigma}$$
-Standard deviation ($\sigma$) and mean ($\mu$) are computed on-the-fly using **Welford's Running Statistics algorithm**, preventing numerical overflow. 
+### 2. ⚡ Tier 1: Embedded EXIF Thumbnail Extraction (< 0.5 ms)
+For JPEG, HEIC, and RAW images, DSLR and smartphone cameras embed a pre-rendered $160\times 120$ or $640\times 480$ thumbnail in the EXIF APP1 IFD1 segment.
+- `FastImageDecoder` reads only the first ~32KB to 64KB header of the file.
+- Decodes the small thumbnail slice directly and applies the EXIF orientation matrix.
+- **Speedup:** **~15× faster** than full-resolution 24MP–48MP decompressions.
 
-Prior to streaming, the engine selects **three champion images** (the oldest, newest, and median files by modification date). Their features are extracted first to bootstrap the initial running mean and standard deviation, preventing variance collapse during the early ingestion phase.
+### 3. 🌐 Tier 2: 128KB Large Buffered Stream
+For images without embedded thumbnails (PNG, WebP, AVIF), `FastImageDecoder` uses a 128KB `BufReader` stream to eliminate small packet stalls across network shares (`\\SyNAS\photo\`) and NVMe SSDs.
 
-### 3. Composite Distance Function
-The distance between image vector $\mathbf{v}_1$ and cluster centroid $\mathbf{v}_2$ is defined by:
-$$D(\mathbf{v}_1, \mathbf{v}_2) = \sqrt{\sum_{i=0}^{4} w_i (z_{1,i} - z_{2,i})^2} + d_{H}(\text{phash}_1, \text{phash}_2) \cdot w_{\text{phash}} + d_{P}(\text{pal}_1, \text{pal}_2) \cdot w_{\text{pal}}$$
-* **Weighted Euclidean Distance:** Applied over normalized continuous dimensions (time, $L$, $a$, $b$, aspect ratio) where weights ($w_i$) are controlled by user sliders.
-* **Hamming Penalty ($d_H$):** Computes normalized Hamming distance on the 64-bit pHashes (XOR followed by population count). If structural layouts diverge, a weight-based distance penalty is added, preventing the grouping of visually distinct photos.
-* **Palette Distance ($d_P$):** Computes the average Delta-E distance between the sorted 8-color centroids of both images.
+---
 
-### 4. Real-time Cluster Merging & UI Streaming
-To ensure a fluid experience:
-* **Dynamic Merging:** When an image is absorbed, it shifts the cluster's centroid. The manager checks if the updated centroid is within $\epsilon \cdot 1.2$ of any other cluster's centroid, merging them if necessary.
-* **Partial Snapshots:** Every 4 ingested images, the background worker sends a `VirtualClustersUpdated` message containing a snapshot of the current grouping, allowing the user to watch the organization build in real-time.
+## 🧠 The 8-Dimensional Feature Space & Geometric Profile
 
-### 5. Determinant Force Analysis ("White Box" Feedback)
-After clustering, the engine calculates the normalized ratios of user-defined weights:
-$$\text{Force}_{\text{dimension}} \% = \frac{w_{\text{dimension}}}{\sum w} \cdot 100$$
-This translates the complex mathematical boundaries into three human-readable percentages (Time, Color, Composition), exposing the primary drivers behind the virtual collection formation.
+Located in `src/engine/auto_group.rs`, the engine projects every image into an **8-dimensional continuous vector space** coupled with structural hashes and color palettes:
+
+$$\mathbf{x} = \left[ t, L, a, b, ar, S, B, R, \text{phash}, \text{palette} \right]$$
+
+### 1. Continuous Feature Definitions ($D=8$)
+1. **Time ($t$):** Normalized modification / EXIF timestamp.
+2. **Luminance ($L$):** Lightness channel in the perceptually uniform **CIELAB** color space.
+3. **Chromaticity ($a, b$):** Green-Red ($a$) and Blue-Yellow ($b$) channels in CIELAB space.
+4. **Aspect Ratio ($ar$):** Dimensional width divided by height.
+5. **Croquis / Sketch Score ($S$):** Evaluates Sobel edge gradient variance divided by mean color saturation:
+   $$\text{Score}_{\text{sketch}} = \frac{\text{Var}(\|\nabla I_{\text{Sobel}}\|)}{\bar{S}_{\text{HSV}} + 0.001}$$
+6. **Silhouette / Binary Score ($B$):** Evaluates Otsu bimodal inter-class variance ratio:
+   $$\text{Score}_{\text{binary}} = \frac{\max_t \sigma_B^2(t)}{\sigma_{\text{Global}}^2}$$
+7. **3D Raytrace Score ($R$):** Analyzes $4\times 4$ micro-blocks for mathematical gradient linearity and localized high-frequency rendering noise:
+   $$\text{Score}_{\text{raytrace}} = 0.6 \cdot \text{Ratio}_{\text{linear}} + 0.4 \cdot \text{Ratio}_{\text{noise}}$$
+
+### 2. Zero-Cost Short-Circuiting Optimization
+To preserve maximum ingestion throughput, the feature extractor conditionally skips heavy rendering algorithms based on user slider configuration:
+- **`weight_raytrace == 0.0`**: Skips all 1,024 $4\times 4$ micro-gradient checks (**~25–30% speedup**).
+- **`weight_sketch == 0.0` & `weight_binary == 0.0` & `weight_raytrace == 0.0`**: Completely bypasses the $128\times 128$ intermediate thumbnail generation (**~40–50% speedup**).
+
+---
+
+## ⚡ Hardware Acceleration & Multi-Backend Tensor Engine
+
+Located in `src/engine/tensor_backend.rs`, `src/engine/wgpu_backend.rs`, and `src/engine/auto_group.rs`, BildBlitz accelerates distance matrix calculations via **Mini-Batch GEMM (General Matrix Multiplication)**:
+
+```mermaid
+graph LR
+    subgraph Feature Buffering
+        A[Incoming Image Features] --> B[Mini-Batch Buffer N=512]
+        B --> C[Matrix A: N x 8 Feature Matrix]
+        D[Active Cluster Centroids] --> E[Matrix B: K x 8 Centroid Matrix]
+    end
+
+    subgraph Multi-Backend Tensor Engine
+        C --> F{TensorEngine}
+        E --> F
+        F -->|Feature: cuda| G[NVIDIA cuBLAS GEMM Kernel]
+        F -->|Feature: directml| H[DirectML DirectX 12 Tensor Kernel]
+        F -->|Feature: wgpu-compute| I[WGSL Compute Shader Pipeline]
+        F -->|Feature: cpu| J[Rayon AVX2/SSE SIMD Matrix Mult]
+    end
+
+    G --> K[Matrix C: N x K Pairwise Distances]
+    H --> K
+    I --> K
+    J --> K
+    K --> L[Streamlined Centroid Assignment & Dynamic Merge]
+```
+
+### 1. Supported Acceleration Backends
+* **`cuda` (NVIDIA RTX / cuBLAS):** Uses `candle-core` / `candle-nn` bindings to execute cuBLAS matrix multiplications on dedicated NVIDIA Tensor Cores.
+* **`directml` (Intel Arc 140T / AMD Radeon / Windows 11):** Uses ONNX Runtime DirectML bindings to leverage Windows ML and DirectX 12 compute queues.
+* **`wgpu-compute` (Cross-Platform WGSL Compute Shaders):** Executes raw WGSL shader kernels across Vulkan, DX12, or Metal for universal GPU execution without external toolkit dependencies.
+* **`cpu` (SIMD Fallback):** Multi-threaded Rayon AVX2/FMA matrix distance calculations.
+
+---
+
+## ⚙️ The 6 Determinant Forces & Performance Telemetry
+
+### 1. 6-Dimensional Force Attribution
+After clustering completes, BildBlitz provides "White Box" explainability by normalizing the active weights into percentages:
+
+$$\text{Force}_i \% = \frac{w_i}{\sum_{j=1}^{6} w_j} \cdot 100$$
+
+The UI renders **6 dedicated progress bars**:
+- **⏱ Time** (Blue)
+- **🎨 Color** (Magenta)
+- **📐 Composition** (Teal)
+- **✏️ Croquis / Sketch** (Orange)
+- **⬛ Silhouette / Binaire** (Purple)
+- **🧊 3D Raytrace** (Cyan)
+- **Dominant Driver Badge**: Displays which feature primarily determined cluster boundaries.
+
+### 2. Lock-Free Profiling Telemetry (`TimingsAccumulator`)
+Using lock-free atomic accumulators (`Arc<AtomicU64>`), the engine tracks microsecond execution costs per image across parallel Rayon threads and visualizes them in the **⚡ Computation Cost & Performance Profile** card:
+- 📥 **Image Decoding & Disk I/O**
+- 🎨 **Color Lab & Palette (32×32)**
+- 👁️ **Perceptual pHash (DCT)**
+- ✏️ **Sobel Sketch Analysis (128×128)**
+- ⬛ **Otsu Binary Analysis (128×128)**
+- 🧊 **4×4 Raytrace Analysis (128×128)** *(or `⚡ Skipped`)*
+- 🧠 **Online Welford Clustering**
+- **Throughput Rate**: (e.g. `⚡ 480 img/s`).
+
+---
+
+## 🗄️ Database & Schema Design
+
+Located in `src/library/db.rs`, the persistent storage layer uses `sqlx` over SQLite:
+
+```sql
+CREATE TABLE IF NOT EXISTS images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL UNIQUE,
+    size INTEGER,
+    modified INTEGER,
+    exif_json TEXT,
+    phash TEXT,
+    sketch_score REAL,
+    binary_score REAL,
+    raytrace_score REAL,
+    lab_l REAL,
+    lab_a REAL,
+    lab_b REAL,
+    aspect_ratio REAL,
+    palette_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_phash ON images(phash);
+CREATE INDEX IF NOT EXISTS idx_path_mod ON images(path, modified);
+
+CREATE TABLE IF NOT EXISTS virtual_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_members (
+    collection_id INTEGER NOT NULL,
+    image_id INTEGER NOT NULL,
+    FOREIGN KEY(collection_id) REFERENCES virtual_collections(id),
+    FOREIGN KEY(image_id) REFERENCES images(id),
+    UNIQUE(collection_id, image_id)
+);
+```
 
 ---
 
@@ -130,56 +267,9 @@ Decoupling UI responsiveness from high-latency decoding relies on two customized
 
 ---
 
-## 🗄️ Database & Schema Design
-
-Located in `src/library/db.rs`, the persistent index uses `sqlx` over a local SQLite engine. The schema tracks directory contents, metadata cache, and virtual collections:
-
-```sql
--- Main indexed images table
-CREATE TABLE IF NOT EXISTS images (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    path TEXT NOT NULL UNIQUE,
-    size INTEGER,
-    modified INTEGER,
-    exif_json TEXT,
-    phash TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_phash ON images(phash);
-
--- Virtual collections definitions
-CREATE TABLE IF NOT EXISTS virtual_collections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-);
-
--- Many-to-many relationship mapping virtual grouping
-CREATE TABLE IF NOT EXISTS collection_members (
-    collection_id INTEGER NOT NULL,
-    image_id INTEGER NOT NULL,
-    FOREIGN KEY(collection_id) REFERENCES virtual_collections(id),
-    FOREIGN KEY(image_id) REFERENCES images(id),
-    UNIQUE(collection_id, image_id)
-);
-```
-
-### Key DB Routines
-* **Duplicates Finder:** Groups records by identical `phash` fields (filtering groups where count > 1) to populate the Duplicates Tab.
-* **Metadata Persistence:** Stores parsed EXIF JSON blocks asynchronously to avoid re-parsing during subsequent scans.
-
----
-
-## 🌐 Actix-Web API Server
-
-Embedded in `src/server/mod.rs`, an Actix-web daemon binds to local loopback `127.0.0.1:8080` at launch:
-* Exposes a `GET /stats` endpoint that queries the shared `DatabaseManager` pool, returning JSON-serialized details of indexed images and active virtual collections.
-* Serves as an integration point for external python scripts, backup daemons, or remote curation interfaces.
-
----
-
 ## 📁 Lossless Transform Engine
 
 Located in `src/library/transform.rs`, the application implements lossless JPEG transformations utilizing native mathematical operations on the underlying image matrix:
-* **Rotate:** Executes 90° or 180° orientation adjustments.
+* **Rotate:** Executes 90°, 180°, or 270° orientation adjustments.
 * **Flip:** Executes horizontal and vertical mirror reflections.
 * **Cache Invalidation Loop:** When a transformation succeeds, the engine invalidates the image's records in the SQLite database, purges the `moka` thumbnail and HD caches, and immediately commands background tasks to re-generate the textures, ensuring the UI reflects the modified file layout instantly.

@@ -14,12 +14,14 @@ struct Stats {
 #[derive(Deserialize)]
 struct SmartFolderPayload {
     paths: Vec<String>,
+    options: Option<crate::engine::smart_folder::SmartFolderOptions>,
 }
 
 #[post("/api/smart-folder")]
 async fn create_smart_folder(req: web::Json<SmartFolderPayload>) -> impl Responder {
     let path_bufs: Vec<PathBuf> = req.paths.iter().map(PathBuf::from).collect();
-    match crate::engine::smart_folder::execute_smart_subfolder(&path_bufs, None).await {
+    let opts = req.options.clone();
+    match crate::engine::smart_folder::execute_smart_subfolder(&path_bufs, opts).await {
         Ok(result) => HttpResponse::Ok().json(result),
         Err(e) => HttpResponse::BadRequest().body(e.to_string()),
     }

@@ -4,3 +4,4 @@ pub mod config;
 pub mod db;
 pub mod hash;
 pub mod transform;
+pub mod fast_decode;

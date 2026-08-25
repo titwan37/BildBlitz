@@ -54,6 +54,9 @@ pub struct AutoGroupConfig {
     pub weight_color: f32,
     pub weight_time: f32,
     pub weight_name: f32,
+    pub weight_sketch: f32,
+    pub weight_binary: f32,
+    pub weight_raytrace: f32,
     pub eps: f32,
     pub min_samples: usize,
     pub create_physical: bool,
@@ -78,13 +81,53 @@ pub struct Cluster {
     pub label: Option<String>,
 }
 
+/// Determinant forces as normalized percentages across all 6 driving dimensions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DeterminantForces {
+    pub time: f32,
+    pub color: f32,
+    pub composition: f32,
+    pub sketch: f32,
+    pub binary: f32,
+    pub raytrace: f32,
+}
+
+impl DeterminantForces {
+    pub fn dominant_name(&self) -> &'static str {
+        let mut max_val = self.time;
+        let mut max_name = "Time";
+        if self.color > max_val { max_val = self.color; max_name = "Color"; }
+        if self.composition > max_val { max_val = self.composition; max_name = "Composition"; }
+        if self.sketch > max_val { max_val = self.sketch; max_name = "Croquis / Sketch"; }
+        if self.binary > max_val { max_val = self.binary; max_name = "Silhouette / Binaire"; }
+        if self.raytrace > max_val { max_name = "3D Raytrace"; }
+        max_name
+    }
+}
+
+/// Performance telemetry & CPU timing breakdown across feature extractors.
+#[derive(Clone, Debug, Default)]
+pub struct PerformanceProfile {
+    pub total_elapsed_ms: f64,
+    pub total_images: usize,
+    pub images_per_sec: f64,
+    pub decode_ms: f64,
+    pub color_extract_ms: f64,
+    pub phash_ms: f64,
+    pub sketch_ms: f64,
+    pub binary_ms: f64,
+    pub raytrace_ms: f64,
+    pub clustering_ms: f64,
+}
+
 /// Result of the auto-grouping task.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AutoGroupResult {
     pub clusters: Vec<Cluster>,
-    /// Determinant forces as normalized percentages: (time%, color%, palette%)
-    /// These quantify which feature dimension drove the cluster formation.
-    pub forces: (f32, f32, f32),
+    /// Determinant forces quantifying which of the 6 dimensions drove cluster formation.
+    pub forces: DeterminantForces,
+    /// Detailed execution timing and performance telemetry.
+    pub perf: Option<PerformanceProfile>,
 }
 
 /// Result of a duplicates scan.

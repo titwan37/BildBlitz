@@ -64,6 +64,9 @@ fn generate_dataset(name: &str, count: usize, seed: u64) -> Vec<ImageFeature> {
             aspect_ratio: aspect,
             phash_bits: Some(lcg.next_u64()),
             dominant_colors: vec![[l, a, b]],
+            sketch_score: 0.0,
+            binary_score: 0.0,
+            raytrace_score: 0.0,
         });
     }
     features
@@ -210,7 +213,7 @@ fn calculate_silhouette(data: &[ImageFeature], assignments: &[usize], config: &A
     let mut norm = NormStats::new(0.0);
     for f in data { norm.update(f); }
 
-    let vecs: Vec<[f64; 5]> = data.iter().map(|f| norm.normalize(f)).collect();
+    let vecs: Vec<[f64; 8]> = data.iter().map(|f| norm.normalize(f)).collect();
 
     let mut s_total = 0.0;
     
@@ -235,6 +238,9 @@ fn calculate_silhouette(data: &[ImageFeature], assignments: &[usize], config: &A
                 config.weight_color as f64, 
                 config.weight_time as f64,
                 config.weight_name as f64,
+                config.weight_sketch as f64,
+                config.weight_binary as f64,
+                config.weight_raytrace as f64,
                 phash_weight, 
                 palette_weight
             );
@@ -293,6 +299,9 @@ pub async fn run_benchmark_suite() {
         weight_time: 1.0,
         weight_color: 1.0,
         weight_name: 0.0,
+        weight_sketch: 1.0,
+        weight_binary: 1.0,
+        weight_raytrace: 1.0,
         create_physical: false,
     };
 
@@ -407,11 +416,15 @@ pub async fn run_study_on_folder(
 
     let _ = progress_tx.send(crate::messages::AutoGroupProgress::Extracted { done: 0, total }).await;
 
+    let do_sketch = config.weight_sketch > 0.001;
+    let do_binary = config.weight_binary > 0.001;
+    let do_raytrace = config.weight_raytrace > 0.001;
+
     // 1. Extract features for all images
     let features: Vec<ImageFeature> = images.into_par_iter()
         .filter_map(|file| {
             // We don't need the DB for the study, just the features
-            extract_single_feature(file.path.clone(), file).map(|(f, _, _)| f)
+            extract_single_feature(file.path.clone(), file, do_sketch, do_binary, do_raytrace, None).map(|(f, _, _)| f)
         })
         .collect();
     

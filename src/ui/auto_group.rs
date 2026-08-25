@@ -8,6 +8,9 @@ pub struct AutoGroupState {
     pub weight_color: f32,
     pub weight_time: f32,
     pub weight_name: f32,
+    pub weight_sketch: f32,
+    pub weight_binary: f32,
+    pub weight_raytrace: f32,
     pub eps: f32,
     pub min_samples: usize,
     pub create_physical: bool,
@@ -25,6 +28,9 @@ impl AutoGroupState {
             weight_color: 0.2,
             weight_time: 0.1,
             weight_name: 0.1,
+            weight_sketch: 0.2,
+            weight_binary: 0.2,
+            weight_raytrace: 0.0,
             eps: 0.6,
             min_samples: 5,
             create_physical: false,
@@ -135,41 +141,70 @@ impl AutoGroupState {
             ui.label(format!("Generated {} clusters.", res.clusters.len()));
             ui.add_space(8.0);
 
-            // ── Determinant Force Feedback ─────────────────────────────────────
-            let (pt, pc, ppal) = res.forces;
-            let dominant = if pt >= pc && pt >= ppal { "Time" }
-                           else if pc >= pt && pc >= ppal { "Color" }
-                           else { "Composition" };
+            ui.add_space(6.0);
+            ui.label(format!("Generated {} clusters.", res.clusters.len()));
+            ui.add_space(8.0);
+
+            // ── Determinant Force Feedback (6 Dimensions) ──────────────────────
+            let f = res.forces;
+            let dominant = f.dominant_name();
 
             egui::Frame::group(ui.style())
                 .corner_radius(6.0)
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new("⚙ Determinant Forces").strong().size(13.0));
-                    ui.label(egui::RichText::new("What drove this clustering?").small().italics()
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⚙ Determinant Forces").strong().size(13.0));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(format!("Driven by: {}", dominant))
+                                .small().strong().color(egui::Color32::from_rgb(240, 180, 80)));
+                        });
+                    });
+                    ui.label(egui::RichText::new("What drove this clustering? (Normalized feature weight)").small().italics()
                         .color(ui.visuals().weak_text_color()));
                     ui.add_space(6.0);
 
-                    // Time bar
+                    // 1. Time bar
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("⏱ Time ").monospace().size(11.0));
-                        ui.add(egui::ProgressBar::new(pt / 100.0)
-                            .text(format!("{:.1}%", pt))
+                        ui.label(egui::RichText::new("⏱ Time   ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.time / 100.0)
+                            .text(format!("{:.1}%", f.time))
                             .fill(egui::Color32::from_rgb(80, 140, 220)));
                     });
-                    // Color bar
+                    // 2. Color bar
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("🎨 Color").monospace().size(11.0));
-                        ui.add(egui::ProgressBar::new(pc / 100.0)
-                            .text(format!("{:.1}%", pc))
+                        ui.label(egui::RichText::new("🎨 Color  ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.color / 100.0)
+                            .text(format!("{:.1}%", f.color))
                             .fill(egui::Color32::from_rgb(200, 100, 160)));
                     });
-                    // Composition bar
+                    // 3. Composition bar
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("📐 Comp.").monospace().size(11.0));
-                        ui.add(egui::ProgressBar::new(ppal / 100.0)
-                            .text(format!("{:.1}%", ppal))
+                        ui.label(egui::RichText::new("📐 Comp.  ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.composition / 100.0)
+                            .text(format!("{:.1}%", f.composition))
                             .fill(egui::Color32::from_rgb(80, 190, 140)));
+                    });
+                    // 4. Sketch bar
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("✏️ Sketch ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.sketch / 100.0)
+                            .text(format!("{:.1}%", f.sketch))
+                            .fill(egui::Color32::from_rgb(230, 140, 60)));
+                    });
+                    // 5. Binary bar
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("⬛ Binary ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.binary / 100.0)
+                            .text(format!("{:.1}%", f.binary))
+                            .fill(egui::Color32::from_rgb(160, 90, 210)));
+                    });
+                    // 6. Raytrace bar
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("🧊 Render ").monospace().size(11.0));
+                        ui.add(egui::ProgressBar::new(f.raytrace / 100.0)
+                            .text(format!("{:.1}%", f.raytrace))
+                            .fill(egui::Color32::from_rgb(60, 200, 220)));
                     });
 
                     ui.add_space(6.0);
@@ -178,14 +213,71 @@ impl AutoGroupState {
                          {}",
                         dominant,
                         match dominant {
-                            "Time" => "Lower 'Time Weight' if you want more color-based groups.",
-                            "Color" => "Lower 'Color Weight' if timestamps matter more.",
+                            "Time" => "Lower 'Time Weight' if you want more color/style-based groups.",
+                            "Color" => "Lower 'Color Weight' if timestamps or rendering style matter more.",
+                            "Croquis / Sketch" => "Sketches and line art strongly separated.",
+                            "Silhouette / Binaire" => "High contrast logos & monochrome shapes isolated.",
+                            "3D Raytrace" => "3D renders & CG separated from natural photography.",
                             _ => "Adjust Epsilon to control cluster granularity.",
                         }
                     );
                     ui.label(egui::RichText::new(tip).small().italics()
                         .color(ui.visuals().warn_fg_color));
                 });
+
+            // ── Performance & Calculation Cost Profile ─────────────────────────
+            if let Some(perf) = &res.perf {
+                ui.add_space(8.0);
+                egui::Frame::group(ui.style())
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("⚡ Computation Cost & Performance").strong().size(13.0));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(format!("{:.0} img/s", perf.images_per_sec))
+                                    .small().strong().color(egui::Color32::from_rgb(100, 220, 140)));
+                            });
+                        });
+                        ui.label(egui::RichText::new(format!(
+                            "Total batch time: {:.2}s across {} images",
+                            perf.total_elapsed_ms / 1000.0,
+                            perf.total_images
+                        )).small().italics().color(ui.visuals().weak_text_color()));
+                        ui.add_space(6.0);
+
+                        let total_cpu_ms = (perf.decode_ms + perf.color_extract_ms + perf.phash_ms 
+                            + perf.sketch_ms + perf.binary_ms + perf.raytrace_ms + perf.clustering_ms).max(0.001);
+
+                        let render_timing_row = |ui: &mut egui::Ui, name: &str, ms: f64, color: egui::Color32| {
+                            let pct = (ms / total_cpu_ms * 100.0).clamp(0.0, 100.0);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("{:<18}", name)).monospace().size(10.5));
+                                ui.add(egui::ProgressBar::new((pct / 100.0) as f32)
+                                    .text(format!("{:.1}ms ({:.1}%)", ms, pct))
+                                    .fill(color));
+                            });
+                        };
+
+                        render_timing_row(ui, "📥 Image Decoding", perf.decode_ms, egui::Color32::from_rgb(130, 130, 140));
+                        render_timing_row(ui, "🎨 Color & Palette", perf.color_extract_ms, egui::Color32::from_rgb(200, 100, 160));
+                        render_timing_row(ui, "👁️ pHash (DCT)", perf.phash_ms, egui::Color32::from_rgb(80, 140, 220));
+                        render_timing_row(ui, "✏️ Sobel Sketch", perf.sketch_ms, egui::Color32::from_rgb(230, 140, 60));
+                        render_timing_row(ui, "⬛ Otsu Binarity", perf.binary_ms, egui::Color32::from_rgb(160, 90, 210));
+
+                        if perf.raytrace_ms > 0.01 {
+                            render_timing_row(ui, "🧊 4x4 Raytrace", perf.raytrace_ms, egui::Color32::from_rgb(60, 200, 220));
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("🧊 4x4 Raytrace   ").monospace().size(10.5));
+                                ui.label(egui::RichText::new("⚡ Skipped (0.0ms - Slider at 0)")
+                                    .small().italics().color(egui::Color32::from_rgb(100, 200, 120)));
+                            });
+                        }
+
+                        render_timing_row(ui, "🧠 Clustering", perf.clustering_ms, egui::Color32::from_rgb(80, 190, 140));
+                    });
+            }
 
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Review clusters in the main view via the 'Virtual Collections' tab.").small());
@@ -230,6 +322,12 @@ impl AutoGroupState {
         ui.add(egui::Slider::new(&mut self.weight_time, 0.0..=1.0).text("Time Weight"));
         ui.add(egui::Slider::new(&mut self.weight_color, 0.0..=1.0).text("Color Weight"));
         ui.add(egui::Slider::new(&mut self.weight_name, 0.0..=1.0).text("Filename Weight"));
+        
+        ui.separator();
+        ui.heading("Rendering Profile Weights");
+        ui.add(egui::Slider::new(&mut self.weight_sketch, 0.0..=1.0).text("Croquis / Dessin (S)"));
+        ui.add(egui::Slider::new(&mut self.weight_binary, 0.0..=1.0).text("Silhouette Binaire (B)"));
+        ui.add(egui::Slider::new(&mut self.weight_raytrace, 0.0..=1.0).text("Rendu 3D / Raytrace (R)"));
 
         ui.separator();
         ui.heading("Advanced Settings (DBSCAN)");
@@ -243,6 +341,9 @@ impl AutoGroupState {
                             weight_color: self.weight_color,
                             weight_time: self.weight_time,
                             weight_name: self.weight_name,
+                            weight_sketch: self.weight_sketch,
+                            weight_binary: self.weight_binary,
+                            weight_raytrace: self.weight_raytrace,
                             eps: self.eps,
                             min_samples: self.min_samples,
                             create_physical: false,
@@ -273,6 +374,9 @@ impl AutoGroupState {
                         weight_color: self.weight_color,
                         weight_time: self.weight_time,
                         weight_name: self.weight_name,
+                        weight_sketch: self.weight_sketch,
+                        weight_binary: self.weight_binary,
+                        weight_raytrace: self.weight_raytrace,
                         eps: self.eps,
                         min_samples: self.min_samples,
                         create_physical: self.create_physical,
@@ -291,6 +395,9 @@ impl AutoGroupState {
                         weight_color: self.weight_color,
                         weight_time: self.weight_time,
                         weight_name: self.weight_name,
+                        weight_sketch: self.weight_sketch,
+                        weight_binary: self.weight_binary,
+                        weight_raytrace: self.weight_raytrace,
                         eps: self.eps,
                         min_samples: self.min_samples,
                         create_physical: false, // Don't create folders for study
