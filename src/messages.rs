@@ -71,6 +71,8 @@ pub enum AutoGroupProgress {
     Moving { done: usize, total: usize },
     /// Live snapshot of clusters as they grow — enables real-time UI rendering.
     VirtualClustersUpdated { clusters: Vec<Cluster> },
+    /// Notification that specific clusters were committed into physical folders on disk.
+    Committed { committed_cluster_ids: Vec<usize> },
 }
 
 /// A resulting cluster of files.
@@ -148,7 +150,7 @@ pub enum BackendMsg {
     AutoGroupStart(AutoGroupConfig),
     AutoGroupTuneEpsilon(AutoGroupConfig),
     AutoGroupCommit {
-        result: AutoGroupResult,
+        clusters: Vec<Cluster>,
         source_path: std::path::PathBuf,
     },
     AutoGroupRunStudy(AutoGroupConfig),

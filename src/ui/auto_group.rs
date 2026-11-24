@@ -19,6 +19,7 @@ pub struct AutoGroupState {
     pub auto_tune_running: bool,
     pub progress: Option<AutoGroupProgress>,
     pub result: Option<AutoGroupResult>,
+    pub selected_cluster_ids: std::collections::HashSet<usize>,
 }
 
 impl AutoGroupState {
@@ -39,6 +40,7 @@ impl AutoGroupState {
             auto_tune_running: false,
             progress: None,
             result: None,
+            selected_cluster_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -124,6 +126,9 @@ impl AutoGroupState {
                     ui.add(egui::ProgressBar::new(1.0).animate(true)
                         .text(format!("Streaming… {} images in {} groups", n, clusters.len())));
                 }
+                Some(AutoGroupProgress::Committed { committed_cluster_ids }) => {
+                    ui.label(format!("Committed {} theme(s) to physical folders.", committed_cluster_ids.len()));
+                }
                 None => {
                     ui.spinner();
                 }
@@ -137,13 +142,57 @@ impl AutoGroupState {
         if let Some(res) = &self.result {
             ui.heading("Results (Virtual Collections)");
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
             ui.label(format!("Generated {} clusters.", res.clusters.len()));
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
+            // ── Theme Selector List ──────────────────────────────────────────
+            egui::Frame::group(ui.style())
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("📁 Select Themes to Commit").strong().size(12.5));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Clear").clicked() {
+                                self.selected_cluster_ids.clear();
+                            }
+                            if ui.small_button("All").clicked() {
+                                for c in &res.clusters {
+                                    self.selected_cluster_ids.insert(c.id);
+                                }
+                            }
+                        });
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            for c in &res.clusters {
+                                let title = if c.id == 0 {
+                                    format!("📁 Misc ({} items)", c.members.len())
+                                } else {
+                                    format!("Theme {} ({} items)", c.id, c.members.len())
+                                };
+                                let mut checked = self.selected_cluster_ids.contains(&c.id);
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut checked, title).changed() {
+                                        if checked {
+                                            self.selected_cluster_ids.insert(c.id);
+                                        } else {
+                                            self.selected_cluster_ids.remove(&c.id);
+                                        }
+                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.small_button("📁 Commit").on_hover_text("Commit only this theme to folder").clicked() {
+                                            commit_req = Some(vec![c.clone()]);
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                });
             ui.add_space(6.0);
-            ui.label(format!("Generated {} clusters.", res.clusters.len()));
-            ui.add_space(8.0);
 
             // ── Determinant Force Feedback (6 Dimensions) ──────────────────────
             let f = res.forces;
@@ -285,23 +334,45 @@ impl AutoGroupState {
 
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("✅ Commit to Physical Folders").clicked() {
-                    commit_req = Some(res.clone());
+                let sel_count = self.selected_cluster_ids.len();
+                let commit_sel_btn = egui::Button::new(
+                    egui::RichText::new(format!("📁 Commit Selected ({})", sel_count))
+                        .strong()
+                        .color(if sel_count > 0 { egui::Color32::from_rgb(100, 220, 140) } else { egui::Color32::GRAY })
+                );
+                if ui.add_enabled(sel_count > 0, commit_sel_btn)
+                    .on_hover_text("Create physical folders for only the selected themes and move their files")
+                    .clicked()
+                {
+                    let to_commit: Vec<_> = res.clusters.iter()
+                        .filter(|c| self.selected_cluster_ids.contains(&c.id))
+                        .cloned()
+                        .collect();
+                    if !to_commit.is_empty() {
+                        commit_req = Some(to_commit);
+                    }
                 }
+
+                if ui.button("Commit All")
+                    .on_hover_text("Commit all generated clusters to physical folders")
+                    .clicked()
+                {
+                    commit_req = Some(res.clusters.clone());
+                }
+
                 if ui.button("✕ Close").clicked() {
                     close_req = true;
                 }
             });
         }
 
-        if let Some(res) = commit_req {
+        if let Some(clusters_to_commit) = commit_req {
             if let Some(path) = current_path.clone() {
                 let _ = tx.try_send(crate::messages::BackendMsg::AutoGroupCommit {
-                    result: res,
+                    clusters: clusters_to_commit,
                     source_path: path,
                 });
                 self.is_running = true;
-                self.result = None;
             }
         }
         

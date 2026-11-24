@@ -471,23 +471,35 @@ impl BildBlitzApp {
                         }
                     });
                 }
-                crate::messages::BackendMsg::AutoGroupCommit { result, source_path } => {
+                crate::messages::BackendMsg::AutoGroupCommit { clusters, source_path } => {
                     let prog_tx = self.channels.ag_prog_tx.clone();
-                    let res_tx = self.channels.ag_res_tx.clone();
                     let audit_tx = self.channels.audit_tx.clone();
+                    let scan_tx = self.channels.scan_tx.clone();
+                    let side = self.active_pane;
+                    let ctx_clone = ctx.clone();
+                    let cluster_count = clusters.len();
                     tokio::spawn(async move {
                         let _ = audit_tx.send(crate::messages::AuditMsg {
-                            name: "Committing Auto-Groups to Disk".to_string(),
+                            name: format!("Committing {} Theme(s) to Disk", cluster_count),
                             success: true,
                             message: None,
                         }).await;
-                        match crate::engine::auto_group::commit_auto_group(result, source_path, prog_tx).await {
-                            Ok(_) => {
+                        match crate::engine::auto_group::commit_auto_group(clusters, source_path.clone(), prog_tx).await {
+                            Ok(committed_ids) => {
                                 let _ = audit_tx.send(crate::messages::AuditMsg {
                                     name: "Auto-Group Commit Succeeded".to_string(),
                                     success: true,
-                                    message: None,
+                                    message: Some(format!("Created folders for {} theme(s)", committed_ids.len())),
                                 }).await;
+                                // Rescan source directory so new physical folders appear immediately
+                                let files = crate::engine::gallery::GalleryScanner::scan_directory(&source_path).await;
+                                let _ = scan_tx.send(crate::messages::ScanResult {
+                                    pane_side: side,
+                                    files,
+                                    invalidated_paths: vec![],
+                                    transformed_paths: vec![],
+                                }).await;
+                                ctx_clone.request_repaint();
                             }
                             Err(e) => {
                                 let _ = audit_tx.send(crate::messages::AuditMsg {
@@ -497,8 +509,6 @@ impl BildBlitzApp {
                                 }).await;
                             }
                         }
-                        // Just clear it by sending an empty result when done
-                        let _ = res_tx.send(crate::messages::AutoGroupResult { clusters: vec![], forces: Default::default(), perf: None }).await;
                     });
                 }
                 crate::messages::BackendMsg::AutoGroupTuneEpsilon(config) => {
@@ -684,6 +694,21 @@ impl BildBlitzApp {
                     });
                     self.active_pane_state().tab_mode = crate::ui::pane_state::TabMode::Collections;
                 }
+                crate::messages::AutoGroupProgress::Committed { committed_cluster_ids } => {
+                    self.auto_group_state.is_running = false;
+                    self.auto_group_state.progress = None;
+                    if let Some(res) = &mut self.auto_group_state.result {
+                        res.clusters.retain(|c| !committed_cluster_ids.contains(&c.id));
+                        for id in &committed_cluster_ids {
+                            self.auto_group_state.selected_cluster_ids.remove(id);
+                            self.left_grid.selected_clusters.remove(id);
+                            self.right_grid.selected_clusters.remove(id);
+                        }
+                        if res.clusters.is_empty() {
+                            self.auto_group_state.result = None;
+                        }
+                    }
+                }
                 other => {
                     self.auto_group_state.progress = Some(other);
                 }
@@ -824,6 +849,26 @@ impl BildBlitzApp {
             }
             GridAction::SmartSubfolder(paths) => {
                 self.handle_smart_subfolder(paths, side, ctx);
+            }
+            GridAction::CommitClusters(cluster_ids) => {
+                if let Some(res) = &self.auto_group_state.result {
+                    let clusters_to_commit: Vec<_> = res.clusters.iter()
+                        .filter(|c| cluster_ids.contains(&c.id))
+                        .cloned()
+                        .collect();
+                    if !clusters_to_commit.is_empty() {
+                        let source_path = self.pane_state(side).current_path.clone()
+                            .or_else(|| self.left_pane.current_path.clone())
+                            .or_else(|| self.right_pane.current_path.clone());
+                        if let Some(path) = source_path {
+                            let _ = self.channels.backend_tx.try_send(crate::messages::BackendMsg::AutoGroupCommit {
+                                clusters: clusters_to_commit,
+                                source_path: path,
+                            });
+                            self.auto_group_state.is_running = true;
+                        }
+                    }
+                }
             }
         }
     }

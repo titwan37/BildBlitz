@@ -10,6 +10,7 @@ pub struct GridView {
     pub loading: std::collections::HashSet<PathBuf>,
     pub folder_counts: std::collections::HashMap<PathBuf, usize>,
     pub loading_counts: std::collections::HashSet<PathBuf>,
+    pub selected_clusters: std::collections::HashSet<usize>,
 }
 
 pub enum GridAction {
@@ -23,6 +24,7 @@ pub enum GridAction {
     Paste(Option<PathBuf>),
     SaveAs(PathBuf),
     SmartSubfolder(Vec<PathBuf>),
+    CommitClusters(Vec<usize>),
 }
 
 /// Bundles the many parameters needed by GridView::show (CS10 fix).
@@ -42,6 +44,7 @@ impl GridView {
             loading: std::collections::HashSet::new(),
             folder_counts: std::collections::HashMap::new(),
             loading_counts: std::collections::HashSet::new(),
+            selected_clusters: std::collections::HashSet::new(),
         }
     }
 
@@ -1006,9 +1009,41 @@ impl GridView {
                 ui.set_min_size(ui.available_size());
                 let thumbnail_size = state.thumbnail_size;
 
+                // ── Top Toolbar for Selective Commit ─────────────────────────
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("✨ {} Virtual Themes", clusters.len())).strong().size(14.0));
+                    ui.separator();
+                    if ui.button("Select All").on_hover_text("Select all themes for batch commit").clicked() {
+                        for c in clusters {
+                            self.selected_clusters.insert(c.id);
+                        }
+                    }
+                    if ui.button("Deselect All").clicked() {
+                        self.selected_clusters.clear();
+                    }
+                    ui.separator();
+
+                    let sel_count = self.selected_clusters.len();
+                    let commit_sel_btn = egui::Button::new(
+                        egui::RichText::new(format!("📁 Commit Selected Themes ({})", sel_count))
+                            .strong()
+                            .color(if sel_count > 0 { egui::Color32::from_rgb(100, 220, 140) } else { egui::Color32::GRAY })
+                    );
+                    if ui.add_enabled(sel_count > 0, commit_sel_btn)
+                        .on_hover_text("Create physical folders for only the selected themes and move their files")
+                        .clicked()
+                    {
+                        let ids: Vec<usize> = self.selected_clusters.iter().copied().collect();
+                        action = GridAction::CommitClusters(ids);
+                    }
+                });
+                ui.add_space(6.0);
+                ui.separator();
+
                 for cluster in clusters {
                     let header_text = if cluster.id == 0 {
-                        "📁 Miscellaneous".to_string()
+                        format!("📁 Miscellaneous ({} items)", cluster.members.len())
                     } else {
                         format!("Theme {} ({} items)", cluster.id, cluster.members.len())
                     };
@@ -1022,9 +1057,25 @@ impl GridView {
                     .id_salt(id)
                     .default_open(true)
                     .show(ui, |ui| {
-                        if let Some(label) = &cluster.label {
-                            ui.label(egui::RichText::new(format!("💡 Reason: {}", label)).weak().italics());
-                        }
+                        ui.horizontal(|ui| {
+                            let mut checked = self.selected_clusters.contains(&cluster.id);
+                            if ui.checkbox(&mut checked, "Select theme").changed() {
+                                if checked {
+                                    self.selected_clusters.insert(cluster.id);
+                                } else {
+                                    self.selected_clusters.remove(&cluster.id);
+                                }
+                            }
+                            if ui.button(egui::RichText::new("📁 Commit to Physical Folder").strong())
+                                .on_hover_text("Create physical folder and move ONLY this theme's files into it")
+                                .clicked()
+                            {
+                                action = GridAction::CommitClusters(vec![cluster.id]);
+                            }
+                            if let Some(label) = &cluster.label {
+                                ui.label(egui::RichText::new(format!("💡 Reason: {}", label)).weak().italics());
+                            }
+                        });
                         
                         ui.add_space(8.0);
                         ui.horizontal_wrapped(|ui| {

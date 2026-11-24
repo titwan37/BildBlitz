@@ -1,10 +1,14 @@
 # BildBlitz ⚡
 
+![BildBlitz](./docs/Biltblitz_workflow_sm.jpeg)
+
 **BildBlitz** is a blazing-fast, lightweight image browser, intelligent clustering engine, and library manager designed natively for Windows 10/11. Built from the ground up in Rust using `egui` and `eframe`, it delivers an instant, zero-latency user experience—even when navigating massive directories, network-attached storage, or performing complex multi-dimensional similarity organization.
 
 Designed as a modern spiritual successor to classic image viewers like IrfanView and FastStone, BildBlitz prioritizes extreme performance, a minimal memory footprint, a non-blocking multi-threaded architecture, and optional hardware acceleration via **CUDA, DirectML, and WGPU Compute Shaders**.
 
 ---
+
+![BildBlitz](./docs/BildBlitz_9plee29plee29ple.jpg)
 
 ## ✨ Key Features
 

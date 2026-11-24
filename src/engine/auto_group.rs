@@ -946,20 +946,20 @@ pub async fn run_auto_tune_epsilon(
 // ── Commit ───────────────────────────────────────────────────────────────────
 
 pub async fn commit_auto_group(
-    result: AutoGroupResult,
+    clusters: Vec<Cluster>,
     source_path: std::path::PathBuf,
     progress_tx: mpsc::Sender<AutoGroupProgress>,
-) -> anyhow::Result<()> {
-    // Compute total files considering only clusters that meet the minimum sample size (4 images).
-    let min_cluster_size = 4usize;
-    let filtered_clusters: Vec<_> = result.clusters
+) -> anyhow::Result<Vec<usize>> {
+    let filtered_clusters: Vec<_> = clusters
         .into_iter()
-        .filter(|c| c.members.len() >= min_cluster_size)
+        .filter(|c| !c.members.is_empty())
         .collect();
     let total_files: usize = filtered_clusters.iter().map(|c| c.members.len()).sum();
     let mut moved = 0usize;
+    let mut committed_ids = Vec::new();
 
     for cluster in filtered_clusters {
+        committed_ids.push(cluster.id);
         // Use existing naming scheme (0 = Uncategorized, others = Theme_<id>)
         let folder_name = if cluster.id == 0 {
             "Uncategorized".to_string()
@@ -982,7 +982,14 @@ pub async fn commit_auto_group(
             }
         }
     }
-    Ok(())
+
+    let _ = progress_tx
+        .send(AutoGroupProgress::Committed {
+            committed_cluster_ids: committed_ids.clone(),
+        })
+        .await;
+
+    Ok(committed_ids)
 }
 
 // ── Rendering & Geometric Profile Algorithms ────────────────────────────────
